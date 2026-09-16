@@ -97,6 +97,12 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
             if not text.strip():
                 continue
             x0, y0, x1, y1 = ln["bbox"]
+            size = max(s.get("size", 0.0) for s in spans)
+            # 过滤旋转/竖排文本(如 arXiv 侧边水印):
+            # 字符数不少却挤在极窄的横向范围内, 说明是旋转排布
+            n = len(text.strip())
+            if n > 8 and (x1 - x0) < n * max(size, 1.0) * 0.18:
+                continue
             out.append(
                 Line(
                     text=text.rstrip(),
@@ -104,7 +110,7 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
                     y0=round(y0, 1),
                     x1=round(x1, 1),
                     y1=round(y1, 1),
-                    size=round(max(s.get("size", 0.0) for s in spans), 1),
+                    size=round(size, 1),
                     bold=any(
                         "bold" in s.get("font", "").lower() for s in spans
                     ),
@@ -116,54 +122,73 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
 # ---------- 分栏检测 ----------
 
 def _split_columns(lines: list[Line], page_w: float) -> list[list[Line]]:
-    """检测双栏并把 *所有* 行分配到对应栏。
+    """按阅读顺序把页面行切分为若干组: 通栏带 / 双栏带的左栏 / 右栏。
 
-    关键点: 判断是否存在双栏只用较宽的行, 但分配时按行中心 x 坐标处理
-    全部行。这样连字符续行('ers;')、单句收尾等短行不会被踢出本栏,
-    避免段落断裂产生孤立碎片。
+    双栏论文的阅读顺序是"从上到下, 从左到右":
+    页面先被通栏元素(标题、作者、跨栏表格)横向切成若干水平带,
+    带与带之间按 y 顺序; 每个双栏带内部则左栏整列读完再读右栏。
+
+    因此不能简单地"把所有通栏行提到最前", 也不能对全页做全局 y 排序 ——
+    前者会让页中部的跨栏元素跑到页首, 后者会把左右栏交错洗牌。
     """
     if len(lines) < 8:
-        return [lines]
+        return [sorted(lines, key=lambda l: (l.y0, l.x0))]
 
     mid = page_w / 2
 
-    # 只用较宽的行判断是否为双栏版面
-    wide = [l for l in lines if l.x1 - l.x0 > page_w * 0.08]
-    if not wide:
-        return [sorted(lines, key=lambda l: (l.y0, l.x0))]
+    def is_full(l: Line) -> bool:
+        """是否为跨栏(通栏)行。"""
+        if not (l.x0 < mid < l.x1):
+            return False
+        # 足够宽 -> 通栏正文/摘要
+        if l.x1 - l.x0 > page_w * 0.45:
+            return True
+        # 或者水平居中 -> 居中的标题、作者、单位行
+        return abs((l.x0 + l.x1) / 2 - mid) <= page_w * 0.04
 
+    # 判断是否真的存在双栏结构(只看较宽的非通栏行)
+    wide = [
+        l for l in lines
+        if l.x1 - l.x0 > page_w * 0.08 and not is_full(l)
+    ]
     wl = [l for l in wide if (l.x0 + l.x1) / 2 < mid]
     wr = [l for l in wide if (l.x0 + l.x1) / 2 >= mid]
-    cross = [
-        l for l in wide
-        if l.x0 < mid < l.x1 and l.x1 - l.x0 > page_w * 0.45
-    ]
-    two_col = (
-        len(wl) >= 5
-        and len(wr) >= 5
-        and len(cross) <= len(wide) * 0.15
-    )
-    if not two_col:
+    if len(wl) < 5 or len(wr) < 5:
         return [sorted(lines, key=lambda l: (l.y0, l.x0))]
 
-    # 按中心 x 分配所有行; 跨栏的宽行(通栏标题/摘要/大图说明)单独成组
-    others, cl, cr = [], [], []
-    for l in lines:
-        cx = (l.x0 + l.x1) / 2
-        if l.x0 < mid < l.x1 and l.x1 - l.x0 > page_w * 0.45:
-            others.append(l)
-        elif cx < mid:
-            cl.append(l)
-        else:
-            cr.append(l)
-
+    # 按 y 扫描, 用通栏行把页面切成交替的 通栏带 / 双栏带
     key = lambda l: (l.y0, l.x0)
-    cols = []
-    if others:
-        cols.append(sorted(others, key=key))
-    cols.append(sorted(cl, key=key))
-    cols.append(sorted(cr, key=key))
-    return [c for c in cols if c]
+    bands: list[tuple[str, list[Line]]] = []
+    cur_full: list[Line] = []
+    cur_cols: list[Line] = []
+    for l in sorted(lines, key=key):
+        if is_full(l):
+            if cur_cols:
+                bands.append(("cols", cur_cols))
+                cur_cols = []
+            cur_full.append(l)
+        else:
+            if cur_full:
+                bands.append(("full", cur_full))
+                cur_full = []
+            cur_cols.append(l)
+    if cur_full:
+        bands.append(("full", cur_full))
+    if cur_cols:
+        bands.append(("cols", cur_cols))
+
+    out: list[list[Line]] = []
+    for kind, group in bands:
+        if kind == "full":
+            out.append(sorted(group, key=key))
+            continue
+        left = [l for l in group if (l.x0 + l.x1) / 2 < mid]
+        right = [l for l in group if (l.x0 + l.x1) / 2 >= mid]
+        if left:
+            out.append(sorted(left, key=key))
+        if right:
+            out.append(sorted(right, key=key))
+    return [g for g in out if g]
 
 
 # 严格句末标点(用于碎片愈合与正文判定)。
