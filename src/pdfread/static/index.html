@@ -47,7 +47,7 @@
 
   /* ---------- 顶栏 ---------- */
   header {
-    display: flex; align-items: center; gap: 12px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     padding: 10px 16px; background: var(--panel);
     border-bottom: 1px solid var(--line); flex: 0 0 auto;
   }
@@ -81,6 +81,18 @@
     border: 1px solid var(--line); border-radius: 6px;
     padding: 6px 9px; font-size: 13px;
   }
+  /* 顶栏字号滑块 */
+  .fontctl { display: flex; align-items: center; gap: 7px; }
+  .fontctl .a { color: var(--dim); user-select: none; }
+  .fontctl .a.sm { font-size: 12px; }
+  .fontctl .a.lg { font-size: 17px; font-weight: 600; }
+  .fontctl input[type="range"] {
+    width: 130px; padding: 0; accent-color: var(--accent);
+    cursor: pointer; background: transparent; border: 0;
+  }
+  .fontctl .fv { min-width: 34px; font-size: 12px; color: var(--dim);
+                 text-align: right; font-variant-numeric: tabular-nums; }
+  body.light .fontctl input[type="range"] { background: transparent; }
   input:focus, select:focus { outline: 1px solid var(--accent); }
   label { color: var(--dim); font-size: 12px; }
 
@@ -253,6 +265,12 @@
   <button id="btnOpen" class="ghost" title="选择或上传 PDF">打开</button>
   <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
   <button id="btnTheme" class="ghost" title="切换深色/浅色主题">深色</button>
+  <span class="fontctl" title="译文字号">
+    <span class="a sm">A</span>
+    <input id="fontRange" type="range" min="12" max="22" step="0.5" value="15" />
+    <span class="a lg">A</span>
+    <span class="fv" id="fontVal">15</span>
+  </span>
   <label>页</label>
   <input id="pStart" type="number" min="1" value="1" style="width:62px" />
   <span style="color:var(--dim)">–</span>
@@ -775,6 +793,10 @@ function applyPrefs() {
   if (tb) tb.textContent = prefs.theme === "light" ? "浅色" : "深色";
   const ci = $("#cbItalic");
   if (ci) ci.checked = !!prefs.italicSrc;
+  const fr = $("#fontRange");
+  if (fr) fr.value = prefs.font;
+  const fv = $("#fontVal");
+  if (fv) fv.textContent = prefs.font;
   syncSeg("segTheme", prefs.theme);
   syncSeg("segFont", prefs.font);
   syncSeg("segLayout", prefs.layout);
@@ -1051,6 +1073,17 @@ $("#btnTheme").onclick = () => {
   savePrefs();
   applyPrefs();
 };
+
+/* 顶栏字号滑块: 拖动即时预览, 松手保存 */
+$("#fontRange").addEventListener("input", (e) => {
+  prefs.font = e.target.value;
+  document.documentElement.style.setProperty("--rfs", prefs.font + "px");
+  $("#fontVal").textContent = prefs.font;
+});
+$("#fontRange").addEventListener("change", () => {
+  savePrefs();
+  applyPrefs();
+});
 $("#cbItalic").onchange = (e) => {
   prefs.italicSrc = e.target.checked;
   savePrefs();
