@@ -13,6 +13,8 @@ import asyncio
 import io
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pymupdf
@@ -465,6 +467,24 @@ def raw_pdf() -> FileResponse:
     if STATE["pdf"] is None:
         raise HTTPException(400, "尚未加载 PDF")
     return FileResponse(STATE["pdf"], media_type="application/pdf")
+
+
+@app.post("/api/shutdown")
+def shutdown() -> dict:
+    """退出应用。
+
+    先返回响应, 短暂延时后退出进程, 保证前端能收到结果。
+    服务只绑定 127.0.0.1, 仅本机页面可触发。
+    """
+
+    def _bye() -> None:
+        time.sleep(0.6)
+        # 本地单用户工具, 直接退出即可;
+        # 翻译缓存的写入均为即时提交, 不会丢数据
+        os._exit(0)
+
+    threading.Thread(target=_bye, daemon=True).start()
+    return {"ok": True, "message": "服务即将退出"}
 
 
 # ---------- 初始化 ----------

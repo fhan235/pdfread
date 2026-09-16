@@ -67,6 +67,15 @@
                     color: var(--dim); cursor: not-allowed; }
   button.ghost { background: transparent; border: 1px solid var(--line);
                  color: var(--fg); }
+  button.quit:hover { border-color: #ff7a7a; color: #ff7a7a; }
+
+  /* ---------- 退出遮罩 ---------- */
+  #bye { display: none; position: fixed; inset: 0; z-index: 99;
+         background: var(--bg); align-items: center; justify-content: center;
+         flex-direction: column; gap: 10px; }
+  #bye.on { display: flex; }
+  #bye .t { font-size: 20px; font-weight: 600; }
+  #bye .s { color: var(--dim); font-size: 13px; }
   input, select {
     background: #0e1016; color: var(--fg);
     border: 1px solid var(--line); border-radius: 6px;
@@ -252,6 +261,7 @@
   <button id="btnExp" class="ghost" title="导出当前已翻译内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
   <button id="btnSync" class="ghost">同步: 开</button>
+  <button id="btnQuit" class="ghost quit" title="退出应用">退出</button>
 </header>
 
 <div id="bar"><div></div></div>
@@ -290,6 +300,10 @@
   </div>
 </div>
 <div id="drop">松手即可打开该 PDF</div>
+<div id="bye">
+  <div class="t">pdfread 已退出</div>
+  <div class="s">本地服务已停止，可以直接关闭此页面</div>
+</div>
 
 <div id="cfg">
   <div class="box">
@@ -1017,6 +1031,18 @@ document.querySelectorAll("#segPaper button").forEach((b) => {
 for (const [id, key] of Object.entries(PM_BOXES)) {
   $("#" + id).onchange = (e) => saveParse({ [key]: e.target.checked });
 }
+
+$("#btnQuit").onclick = async () => {
+  if (running && !confirm("翻译正在进行中，确定退出吗？")) return;
+  else if (!running && !confirm("确定退出 pdfread 吗？")) return;
+
+  if (es) { es.close(); es = null; }
+  $("#bye").classList.add("on");
+  document.title = "pdfread 已退出";
+  try {
+    await fetch("/api/shutdown", { method: "POST" });
+  } catch (e) { /* 服务已停止, 连接被断开属正常 */ }
+};
 
 $("#btnTheme").onclick = () => {
   prefs.theme = prefs.theme === "light" ? "dark" : "light";
