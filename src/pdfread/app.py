@@ -50,7 +50,46 @@ def _alert(title: str, msg: str) -> None:
     print(f"{title}: {msg}", file=sys.stderr)
 
 
+def _ensure_console_streams() -> None:
+    """无控制台环境下补全标准流。
+
+    Windows 下以 windowed 方式打包(不弹控制台窗口)时 sys.stdout/sys.stderr
+    为 None。uvicorn 默认的彩色日志格式化器会调用 sys.stdout.isatty(),
+    进而报 ValueError: Unable to configure formatter 'default'。
+    这里把它们指向空设备, 顺便也避免其他库写标准流出错。
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
+
+# 桌面版日志配置: 只使用标准库的 logging.Formatter,
+# 不解析 uvicorn.logging.DefaultFormatter, 彻底规避打包后的日志问题。
+LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "default": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "root": {"level": "WARNING", "handlers": ["default"]},
+    "loggers": {
+        "uvicorn": {"level": "WARNING"},
+        "uvicorn.error": {"level": "WARNING"},
+        "uvicorn.access": {"level": "WARNING"},
+    },
+}
+
+
 def main() -> None:
+    _ensure_console_streams()
     try:
         from . import server
 
@@ -71,7 +110,13 @@ def main() -> None:
 
         import uvicorn
 
-        uvicorn.run(server.app, host=host, port=port, log_level="warning")
+        uvicorn.run(
+            server.app,
+            host=host,
+            port=port,
+            log_level="warning",
+            log_config=LOG_CONFIG,
+        )
 
     except Exception as e:  # 双击启动时没有终端, 必须弹窗
         _alert("pdfread 启动失败", f"{type(e).__name__}: {e}")
