@@ -363,7 +363,8 @@ def page_png(num: int, dpi: int = 110) -> Response:
         raise HTTPException(400, "尚未加载 PDF")
     if not (1 <= num <= doc.page_count):
         raise HTTPException(404, "页码超出范围")
-    dpi = max(60, min(dpi, 200))
+    # 高分屏下前端会按物理像素请求较高 DPI, 上限放宽到 300
+    dpi = max(60, min(dpi, 300))
     pix = doc[num - 1].get_pixmap(dpi=dpi)
     return Response(
         io.BytesIO(pix.tobytes("png")).getvalue(),

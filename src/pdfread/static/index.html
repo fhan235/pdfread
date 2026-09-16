@@ -452,18 +452,41 @@ function buildLeft() {
       `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`;
     left.appendChild(d);
   }
+  // 按实际显示宽度与设备像素比计算所需 DPI, 高分屏不再模糊
+  function targetDpi(img, pageIdx) {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = img.clientWidth || left.clientWidth || 600;
+    const [pw] = INFO.sizes[pageIdx - 1] || [612];
+    // 物理像素宽 / PDF 逻辑宽(1/72 英寸) = 所需 DPI
+    const dpi = Math.round((cssW * dpr * 72) / pw);
+    return Math.min(300, Math.max(120, dpi));
+  }
+
   // 进入视口才真正请求图片，98 页也不卡
   const io = new IntersectionObserver((ents) => {
     ents.forEach((e) => {
       if (!e.isIntersecting) return;
       const img = e.target;
-      if (!img.src) {
-        img.src = `/api/page/${img.dataset.p}.png?dpi=110&v=${INFO.ver || ""}`;
-      }
+      const p = +img.dataset.p;
+      if (img.src && img.dataset.dpi >= targetDpi(img, p) - 30) return;
+      const dpi = targetDpi(img, p);
+      img.dataset.dpi = dpi;
+      img.src = `/api/page/${p}.png?dpi=${dpi}&v=${INFO.ver || ""}`;
       io.unobserve(img);
     });
   }, { rootMargin: "700px" });
   left.querySelectorAll("img").forEach((i) => io.observe(i));
+
+  // 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图
+  let lastW = left.clientWidth, rszTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(rszTimer);
+    rszTimer = setTimeout(() => {
+      if (Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
+      lastW = left.clientWidth;
+      left.querySelectorAll("img").forEach((i) => io.observe(i));
+    }, 300);
+  }, { passive: true });
 }
 
 /* ---------------- 翻译（SSE 流式） ---------------- */
