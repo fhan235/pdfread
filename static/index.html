@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF 双栏对照阅读器</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1a1d26;
+    --line: #2a2f3d;
+    --fg: #e6e8ee;
+    --dim: #8b93a7;
+    --accent: #4f8cff;
+    --ok: #3ecf8e;
+    --warn: #ffb020;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ---------- 顶栏 ---------- */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  header .title {
+    font-weight: 600; max-width: 32vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  header .meta { color: var(--dim); font-size: 12px; }
+  .spacer { flex: 1; }
+  button {
+    background: var(--accent); color: #fff; border: 0;
+    padding: 7px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 500;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { background: #39405200; border: 1px solid var(--line);
+                    color: var(--dim); cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line);
+                 color: var(--fg); }
+  input, select {
+    background: #0e1016; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 9px; font-size: 13px;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); }
+  label { color: var(--dim); font-size: 12px; }
+
+  /* ---------- 进度条 ---------- */
+  #bar { height: 2px; background: var(--line); flex: 0 0 auto; }
+  #bar > div { height: 100%; width: 0; background: var(--ok);
+               transition: width .25s; }
+
+  /* ---------- 主体 ---------- */
+  main { flex: 1; display: flex; min-height: 0; }
+  .pane { flex: 1; overflow-y: auto; overflow-x: hidden;
+          scroll-behavior: auto; }
+  #left  { background: #0d0f14; border-right: 1px solid var(--line); }
+  #right { background: var(--bg); }
+
+  .pg { position: relative; padding: 14px 16px; }
+  .pg img { width: 100%; display: block; border-radius: 4px;
+            background: #fff; min-height: 120px; }
+  .pgno {
+    position: sticky; top: 0; z-index: 5;
+    display: inline-block; margin-bottom: 8px;
+    background: var(--panel); color: var(--dim);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px 11px; font-size: 11px; letter-spacing: .5px;
+  }
+
+  /* ---------- 译文 ---------- */
+  #right .pg { padding: 14px 26px 30px; max-width: 860px; }
+  .para { margin: 0 0 14px; cursor: default; border-radius: 5px;
+          padding: 3px 7px; margin-left: -7px; transition: background .12s;
+          font-size: 15px; line-height: 1.85; letter-spacing: .2px;
+          text-align: justify; }
+  .para:hover { background: #ffffff0a; }
+  .para.heading { font-size: 1.3em; font-weight: 650; line-height: 1.5;
+                  margin: 26px 0 12px; color: #fff; text-align: left; }
+  .para.caption { font-size: .9em; color: var(--dim); line-height: 1.7;
+                  border-left: 2px solid var(--line); padding-left: 10px;
+                  margin-bottom: 10px; }
+  .para.list { margin: 0 0 7px; padding-left: 16px; }
+  /* 图表标签 / 数据来源等次要标注: 紧凑排布, 不撑开版面 */
+  .para.note { display: inline-block; width: auto; max-width: 100%;
+               font-size: .84em; line-height: 1.55; color: var(--dim);
+               background: #ffffff08; border-radius: 4px;
+               margin: 0 5px 5px 0; padding: 1px 8px; vertical-align: top;
+               text-align: left; }
+  .para.note:hover { background: #ffffff14; }
+  .para .src {
+    display: none; margin-top: 7px; padding-top: 7px;
+    border-top: 1px dashed var(--line);
+    color: var(--dim); font-size: .88em; font-style: italic;
+    line-height: 1.6; text-align: left;
+  }
+  .para.show-src .src { display: block; }
+  .para.err { color: #ff7a7a; }
+  .skeleton { color: var(--dim); }
+  .skeleton::after {
+    content: ""; display: block; height: 11px; margin: 7px 0;
+    background: linear-gradient(90deg, #ffffff0d, #ffffff1a, #ffffff0d);
+    background-size: 200% 100%; border-radius: 4px;
+    animation: sk 1.2s infinite;
+  }
+  @keyframes sk { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
+
+  .empty { color: var(--dim); text-align: center; padding: 60px 20px; }
+  kbd { background: #0e1016; border: 1px solid var(--line);
+        border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title" id="docTitle">未加载文档</span>
+  <span class="meta" id="docMeta"></span>
+  <span class="spacer"></span>
+
+  <label>页</label>
+  <input id="pStart" type="number" min="1" value="1" style="width:62px" />
+  <span style="color:var(--dim)">–</span>
+  <input id="pEnd" type="number" min="0" value="5" style="width:62px"
+         title="0 表示到最后一页" />
+
+  <button id="btnRun">开始翻译</button>
+  <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
+  <button id="btnSync" class="ghost">同步: 开</button>
+</header>
+
+<div id="bar"><div></div></div>
+
+<main>
+  <div class="pane" id="left"></div>
+  <div class="pane" id="right">
+    <div class="empty">
+      设置页码范围后点击 <b>开始翻译</b><br /><br />
+      <span style="font-size:12px">
+        译文会逐页流式出现，第一页几秒内即可阅读<br />
+        点击任意段落可展开对应原文 · <kbd>同步</kbd> 控制左右滚动联动
+      </span>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const left = $("#left"), right = $("#right");
+let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
+
+/* ---------------- 初始化 ---------------- */
+async function init() {
+  const r = await fetch("/api/info");
+  INFO = await r.json();
+  if (!INFO.loaded) {
+    $("#docTitle").textContent = "未加载 PDF（用 --pdf 参数启动）";
+    return;
+  }
+  $("#docTitle").textContent = INFO.title || INFO.name;
+  $("#docMeta").textContent =
+    `${INFO.pages} 页 · ${(INFO.chars / 10000).toFixed(1)} 万字符 · ` +
+    `${INFO.paras} 段 · ${INFO.provider}/${INFO.model}`;
+  if (!INFO.ready) {
+    $("#docMeta").innerHTML +=
+      ` <span style="color:var(--warn)">· ${esc(INFO.warn)}</span>`;
+    $("#btnRun").disabled = true;
+    $("#btnRun").title = INFO.warn;
+  }
+  $("#pEnd").value = Math.min(5, INFO.pages);
+  buildLeft();
+}
+
+/* ------------- 左栏：懒加载页面位图 ------------- */
+function buildLeft() {
+  left.innerHTML = "";
+  for (let i = 1; i <= INFO.pages; i++) {
+    const [w, h] = INFO.sizes[i - 1] || [612, 792];
+    const d = document.createElement("div");
+    d.className = "pg";
+    d.id = "L" + i;
+    d.innerHTML =
+      `<span class="pgno">${i} / ${INFO.pages}</span>` +
+      `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`;
+    left.appendChild(d);
+  }
+  // 进入视口才真正请求图片，98 页也不卡
+  const io = new IntersectionObserver((ents) => {
+    ents.forEach((e) => {
+      if (!e.isIntersecting) return;
+      const img = e.target;
+      if (!img.src) img.src = `/api/page/${img.dataset.p}.png?dpi=110`;
+      io.unobserve(img);
+    });
+  }, { rootMargin: "700px" });
+  left.querySelectorAll("img").forEach((i) => io.observe(i));
+}
+
+/* ---------------- 翻译（SSE 流式） ---------------- */
+function run() {
+  if (running) { es && es.close(); finish(); return; }
+
+  const s = Math.max(1, +$("#pStart").value || 1);
+  const e = Math.max(0, +$("#pEnd").value || 0);
+
+  right.innerHTML = "";
+  const lim = e === 0 ? INFO.pages : Math.min(e, INFO.pages);
+  for (let i = s; i <= lim; i++) {
+    const d = document.createElement("div");
+    d.className = "pg"; d.id = "R" + i;
+    d.innerHTML =
+      `<span class="pgno">${i} / ${INFO.pages}</span>` +
+      `<div class="skeleton">翻译中…</div>`;
+    right.appendChild(d);
+  }
+
+  running = true;
+  $("#btnRun").textContent = "停止";
+  let done = 0, total = lim - s + 1;
+
+  es = new EventSource(`/api/translate?start=${s}&end=${e}`);
+
+  es.addEventListener("page", (ev) => {
+    const d = JSON.parse(ev.data);
+    renderPage(d.page, d.items);
+    done++;
+    $("#bar > div").style.width = (done / total * 100) + "%";
+  });
+  es.addEventListener("done", () => { es.close(); finish(); });
+  es.onerror = () => { es.close(); finish(); };
+}
+
+function finish() {
+  running = false;
+  $("#btnRun").textContent = "开始翻译";
+  setTimeout(() => ($("#bar > div").style.width = "0"), 900);
+}
+
+function renderPage(n, items) {
+  const box = document.getElementById("R" + n);
+  if (!box) return;
+  const head = `<span class="pgno">${n} / ${INFO.pages}</span>`;
+  if (!items.length) {
+    box.innerHTML = head + `<div class="skeleton" style="opacity:.4">（本页无正文）</div>`;
+    return;
+  }
+  box.innerHTML = head + items.map((it) => {
+    const bad = it.dst.startsWith("[翻译失败]");
+    const dst = tidy(it.dst || it.src);
+    return `<div class="para ${it.kind}${bad ? " err" : ""}${showSrc ? " show-src" : ""}">`
+      + `<div class="dst">${esc(dst)}</div>`
+      + `<div class="src">${esc(it.src)}</div></div>`;
+  }).join("");
+}
+
+/* 清理模型返回的多余换行/空白，避免译文出现大量断行 */
+function tidy(s) {
+  return s.replace(/\r/g, "")
+          .replace(/\s*\n\s*/g, " ")
+          .replace(/[ \t\u3000]{2,}/g, " ")
+          .trim();
+}
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ---------------- 滚动同步 ---------------- */
+let lock = 0;
+function topPage(pane, prefix) {
+  const y = pane.scrollTop;
+  const kids = pane.children;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i];
+    if (k.offsetTop + k.offsetHeight > y + 40) {
+      return { n: +k.id.slice(1), frac: (y - k.offsetTop) / (k.offsetHeight || 1) };
+    }
+  }
+  return null;
+}
+function sync(from, to) {
+  if (!syncOn || lock) return;
+  const cur = topPage(from);
+  if (!cur) return;
+  const tgt = to.querySelector("#" + (to === left ? "L" : "R") + cur.n);
+  if (!tgt) return;
+  lock = 1;
+  to.scrollTop = tgt.offsetTop + Math.max(0, cur.frac) * tgt.offsetHeight;
+  requestAnimationFrame(() => (lock = 0));
+}
+left.addEventListener("scroll", () => sync(left, right), { passive: true });
+right.addEventListener("scroll", () => sync(right, left), { passive: true });
+
+/* ---------------- 交互 ---------------- */
+$("#btnRun").onclick = run;
+$("#btnSync").onclick = (e) => {
+  syncOn = !syncOn;
+  e.target.textContent = "同步: " + (syncOn ? "开" : "关");
+};
+$("#btnSrc").onclick = () => {
+  showSrc = !showSrc;
+  right.querySelectorAll(".para").forEach((p) =>
+    p.classList.toggle("show-src", showSrc));
+};
+right.addEventListener("click", (e) => {
+  const p = e.target.closest(".para");
+  if (p) p.classList.toggle("show-src");
+});
+
+init();
+</script>
+</body>
+</html>
