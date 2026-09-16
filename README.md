@@ -19,8 +19,12 @@
 
 解压后双击 `pdfread` 即可，浏览器会自动打开。首次使用点右上角「设置」填入 API Key。
 
-> **macOS 首次打开**：因未做 Apple 公证，需右键点击 App →「打开」→ 再次确认。
-> 若提示「已损坏」，终端执行：`xattr -cr /Applications/pdfread.app`
+> **macOS 首次打开**：当前版本未使用 Apple Developer ID 签名和 Notarization（公证），
+> 因此 Gatekeeper 可能提示「无法验证是否包含可能危害 Mac 安全或泄漏隐私的恶意软件」。
+> 这是 macOS 对未签名第三方 App 的标准提示，不代表它检测到了恶意软件。
+>
+> 请右键点击 App →「打开」→ 再次确认；若提示「已损坏」，终端执行：
+> `xattr -cr /Applications/pdfread.app`
 >
 > **Windows**：若被 SmartScreen 拦截，点「更多信息」→「仍要运行」。
 

@@ -59,10 +59,16 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# 仅 macOS / Windows 支持应用图标参数；Linux 不传 icon，避免构建器差异。
 icon = None
-for cand in ("assets/icon.icns" if IS_MAC else "assets/icon.ico",):
-    if (BASE / cand).is_file():
-        icon = str(BASE / cand)
+if IS_MAC:
+    candidate = BASE / "assets" / "icon.icns"
+elif IS_WIN:
+    candidate = BASE / "assets" / "icon.ico"
+else:
+    candidate = None
+if candidate and candidate.is_file():
+    icon = str(candidate)
 
 exe = EXE(
     pyz,
@@ -102,8 +108,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName": "pdfread",
             "CFBundleDisplayName": "PDF 对照阅读器",
-            "CFBundleShortVersionString": "0.2.0",
-            "CFBundleVersion": "0.2.0",
+            "CFBundleShortVersionString": "0.2.4",
+            "CFBundleVersion": "0.2.4",
             "NSHighResolutionCapable": True,
             # 后台服务型应用, 不在 Dock 常驻图标可改为 True
             "LSBackgroundOnly": False,
