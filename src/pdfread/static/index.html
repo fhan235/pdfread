@@ -194,6 +194,16 @@
   #picker .row .sz { color: var(--dim); font-size: 11px; }
   #picker .tip { padding: 10px 16px; font-size: 12px; color: var(--dim);
                  border-top: 1px solid var(--line); }
+  /* 最近打开 */
+  #picker .histwrap { border-bottom: 1px solid var(--line); }
+  #picker .seclabel { padding: 10px 16px 2px; font-size: 11px;
+                      color: var(--dim); letter-spacing: 1px; }
+  #picker .histlist { max-height: 180px; overflow-y: auto; padding: 2px 6px 6px; }
+  #picker .histlist .row.gone .nm { color: var(--dim); text-decoration: line-through; }
+  #picker .hx { background: transparent; border: 0; color: var(--dim);
+                font-size: 15px; padding: 0 6px; cursor: pointer;
+                border-radius: 4px; line-height: 1.4; }
+  #picker .hx:hover { color: #ff7a7a; background: #ffffff12; }
   #picker .addroot { display: flex; gap: 8px; padding: 10px 16px 4px;
                      border-top: 1px solid var(--line); }
   #picker .addroot input { flex: 1; font-size: 12.5px; }
@@ -306,6 +316,10 @@
       <span class="spacer"></span>
       <button id="pkUp" class="ghost">上传文件</button>
       <button id="pkClose" class="ghost">关闭</button>
+    </div>
+    <div class="histwrap" id="pkHistWrap">
+      <div class="seclabel">最近打开</div>
+      <div class="histlist" id="pkHist"></div>
     </div>
     <div class="path" id="pkPath"></div>
     <div class="list" id="pkList"></div>
@@ -639,8 +653,47 @@ right.addEventListener("click", (e) => {
 });
 
 /* ---------------- 文件选择 / 上传 ---------------- */
-function openPicker() { $("#picker").classList.add("on"); loadDir(""); }
+function openPicker() { $("#picker").classList.add("on"); loadHistory(); loadDir(""); }
 function closePicker() { $("#picker").classList.remove("on"); }
+
+function ago(ts) {
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  if (s < 86400 * 30) return Math.floor(s / 86400) + " 天前";
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
+async function loadHistory() {
+  const wrap = $("#pkHistWrap"), box = $("#pkHist");
+  let items = [];
+  try { items = await (await fetch("/api/history")).json(); } catch (e) {}
+  if (!items.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  box.innerHTML = items.map((h) =>
+    `<div class="row${h.exists ? "" : " gone"}" data-hfile="${esc(h.path)}">`
+    + `<span class="ico">▪</span><span class="nm" title="${esc(h.path)}">${esc(h.name)}</span>`
+    + `<span class="sz">${ago(h.ts)}</span>`
+    + `<button class="hx" data-hx="${esc(h.path)}" title="从历史移除">×</button></div>`
+  ).join("");
+}
+
+$("#pkHist").addEventListener("click", async (e) => {
+  const hx = e.target.closest(".hx");
+  if (hx) {
+    e.stopPropagation();
+    await fetch("/api/history/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: hx.dataset.hx }),
+    });
+    loadHistory();
+    return;
+  }
+  const row = e.target.closest(".row[data-hfile]");
+  if (row) openFile(row.dataset.hfile);
+});
 
 async function loadDir(dir) {
   const box = $("#pkList");

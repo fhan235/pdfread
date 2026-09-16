@@ -113,6 +113,14 @@ def _load(path: Path) -> None:
     except OSError:
         STATE["ver"] = ""
 
+    # 记录打开历史(失败不影响主流程)
+    try:
+        from .settings import add_history
+
+        add_history(str(path), path.name)
+    except Exception:
+        pass
+
 
 def _translatable(kind: str) -> bool:
     """该类型是否需要送去翻译。"""
@@ -356,6 +364,32 @@ def set_parse_settings(payload: dict) -> dict:
         "reloaded": need_reload,
         "info": info(),
     }
+
+
+@app.get("/api/history")
+def get_history_api() -> list[dict]:
+    """最近打开的文件列表, 附带文件当前是否存在。"""
+    from .settings import get_history
+
+    out = []
+    for item in get_history():
+        p = Path(str(item.get("path", "")))
+        out.append({
+            "path": item.get("path", ""),
+            "name": item.get("name", p.name),
+            "ts": item.get("ts", 0),
+            "exists": p.is_file(),
+        })
+    return out
+
+
+@app.post("/api/history/remove")
+def remove_history_api(payload: dict) -> dict:
+    """从历史中移除一条记录。"""
+    from .settings import get_history, remove_history
+
+    remove_history(str(payload.get("path", "")))
+    return {"ok": True, "remaining": len(get_history())}
 
 
 @app.get("/api/page/{num}.png")

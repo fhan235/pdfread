@@ -131,3 +131,35 @@ def set_parse(values: dict) -> dict:
     data["parse"] = cur
     save(data)
     return get_parse()
+
+
+# ---------- 打开历史 ----------
+
+HISTORY_MAX = 20
+
+
+def get_history() -> list[dict]:
+    h = load().get("history", [])
+    return h if isinstance(h, list) else []
+
+
+def add_history(path: str, name: str = "") -> None:
+    """记录一次成功打开(去重置顶, 最多保留 HISTORY_MAX 条)。"""
+    import time as _time
+
+    path = str(path)
+    items = [x for x in get_history() if x.get("path") != path]
+    items.insert(0, {
+        "path": path,
+        "name": name or os.path.basename(path),
+        "ts": int(_time.time()),
+    })
+    data = load()
+    data["history"] = items[:HISTORY_MAX]
+    save(data)
+
+
+def remove_history(path: str) -> None:
+    data = load()
+    data["history"] = [x for x in get_history() if x.get("path") != str(path)]
+    save(data)
