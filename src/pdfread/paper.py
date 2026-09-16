@@ -635,7 +635,24 @@ def extract_paper(
     fold_formula  把独立成行的公式并回相邻正文, 复原被截断的段落
     """
     doc = pymupdf.open(path)
+    try:
+        return _extract_paper_doc(
+            doc, skip_refs, skip_tables, mask_math, fold_formula
+        )
+    finally:
+        # 无论解析中途是否异常都必须关闭, 否则句柄会残留在
+        # 常驻 worker 进程里, Windows 上会锁住文件
+        doc.close()
 
+
+def _extract_paper_doc(
+    doc: pymupdf.Document,
+    skip_refs: bool,
+    skip_tables: bool,
+    mask_math: bool,
+    fold_formula: bool,
+) -> tuple[list[list[Block]], list[tuple[float, float]]]:
+    """extract_paper 的主体(文档已由调用方保证关闭)。"""
     # 正文基准字号
     size_chars: dict[float, int] = {}
     all_lines: list[list[Line]] = []
@@ -695,7 +712,6 @@ def extract_paper(
 
         pages.append(blocks)
 
-    doc.close()
     # 正文是跨页连续的一条流, 在全文层面缝合
     pages = _stitch_pages(pages, fold_formula)
     return pages, sizes

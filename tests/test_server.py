@@ -151,3 +151,12 @@ def test_open_url_registers_document(client, make_pdf, monkeypatch):
     data = response.json()
     assert data["loaded"] and data["name"] == "remote.pdf"
     assert client.get("/api/page/1.png", params={"doc": data["doc"]}).status_code == 200
+
+
+def test_failed_open_restarts_worker(client, tmp_path):
+    # 解析失败必须重建进程池: PyMuPDF 打开失败会在 C 层残留句柄,
+    # 常驻 worker 不重启的话, Windows 上文件会被锁住无法清理
+    bad = tmp_path / "broken.pdf"
+    bad.write_bytes(b"garbage")
+    assert client.post("/api/open", params={"path": str(bad)}).status_code == 400
+    assert server._pool is None

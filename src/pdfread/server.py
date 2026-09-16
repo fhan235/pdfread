@@ -143,11 +143,25 @@ def _load(path: Path, skip_references: bool = True) -> None:
     _register(path, data)
 
 
+async def _restart_executor() -> None:
+    """解析/渲染失败后重建进程池。
+
+    PyMuPDF 打开失败时可能在 C 层残留文件句柄(Python 的 with 管不到,
+    已实测确认): Linux 无感, Windows 上文件被锁住导致清理失败。
+    让句柄随 worker 进程一起退出是最可靠的释放方式。
+    """
+    global _pool
+    pool, _pool = _pool, None
+    if pool is not None:
+        await asyncio.to_thread(pool.shutdown, True, cancel_futures=True)
+
+
 async def _inspect(path: Path, skip_references: bool) -> dict:
     from .settings import get_parse
     try:
         return await asyncio.get_running_loop().run_in_executor(_executor(), inspect_pdf, str(path), skip_references, get_parse())
     except Exception:
+        await _restart_executor()
         raise HTTPException(400, "PDF 无法解析，请确认文件完整、未加密且包含页面") from None
 
 
@@ -448,6 +462,7 @@ async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
         png = await asyncio.get_running_loop().run_in_executor(
             _executor(), render_page, str(current["path"]), num, dpi, current["stamp"])
     except Exception:
+        await _restart_executor()
         raise HTTPException(409, "PDF 已变更或无法渲染，请重新打开") from None
     return Response(
         png,
