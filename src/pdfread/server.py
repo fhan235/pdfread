@@ -14,6 +14,7 @@ import json
 import os
 import multiprocessing
 import tempfile
+import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -107,6 +108,18 @@ def _safe_resolve(raw: str) -> Path:
     if not p.is_file() or p.suffix.lower() != ".pdf":
         raise HTTPException(404, "PDF 文件不存在")
     return p
+
+
+def _cleanup_upload(path: Path) -> None:
+    """尽力清理上传文件，不让 Windows 上子进程的短暂文件锁掩盖原始错误。"""
+    for attempt in range(8):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt == 7:
+                return
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _register(path: Path, data: dict, name: str | None = None) -> dict:
@@ -273,11 +286,15 @@ async def upload(file: UploadFile = File(...), skip_references: bool = True) -> 
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "文件过大(上限 200 MB)")
                 fh.write(chunk)
-        data = await _inspect(temporary, skip_references)
         temporary.replace(dest)
+        try:
+            data = await _inspect(dest, skip_references)
+        except HTTPException:
+            _cleanup_upload(dest)
+            raise
         current = _register(dest, data, name)
     finally:
-        temporary.unlink(missing_ok=True)
+        _cleanup_upload(temporary)
         await file.close()
 
     root = dest_dir.resolve()
