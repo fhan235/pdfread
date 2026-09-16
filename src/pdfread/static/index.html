@@ -101,7 +101,8 @@
   main.stacked #left { border-right: 0; border-bottom: 1px solid var(--line);
                        max-height: 50%; }
   main.tronly #left { display: none; }
-  main.tronly #right .pg { margin: 0 auto; }
+  /* 仅译文模式: 保留阅读宽度上限并居中, 避免整行横跨宽屏 */
+  main.tronly #right .pg { margin: 0 auto; max-width: 960px; }
 
   .pg { position: relative; padding: 14px 16px; }
   .pg img { width: 100%; display: block; border-radius: 4px;
@@ -115,7 +116,8 @@
   }
 
   /* ---------- 译文 ---------- */
-  #right .pg { padding: 14px 26px 30px; max-width: 860px; }
+  /* 左右对照: 译文铺满栏宽, 大屏不留白 */
+  #right .pg { padding: 14px 32px 30px; }
   .para { margin: 0 0 14px; cursor: default; border-radius: 5px;
           padding: 3px 7px; margin-left: -7px; transition: background .12s;
           font-size: var(--rfs); line-height: 1.85; letter-spacing: .2px;
