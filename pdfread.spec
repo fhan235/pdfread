@@ -8,10 +8,15 @@
 #   macOS    dist/pdfread.app
 #   Linux    dist/pdfread
 
+import importlib.util
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 BASE = Path(SPECPATH)
 IS_MAC = sys.platform == "darwin"
@@ -19,6 +24,8 @@ IS_WIN = sys.platform == "win32"
 
 # 前端资源必须打进去, 运行时通过 sys._MEIPASS 定位
 datas = [(str(BASE / "src" / "pdfread" / "static"), "pdfread/static")]
+# pywebview 的 js 资产与平台后端
+datas += collect_data_files("webview")
 
 # PyMuPDF 带 C 扩展, 显式收集其动态库
 binaries = collect_dynamic_libs("pymupdf")
@@ -37,6 +44,12 @@ hiddenimports = [
     "uvicorn.lifespan.on",
     "multipart",
 ]
+# pywebview 各平台后端(winforms/cocoa/gtk/qt), 全部收集
+hiddenimports += collect_submodules("webview")
+# Windows 的 EdgeChromium 后端依赖 pythonnet, 仅在可导入时收集
+for mod in ("clr", "clr_loader", "pythonnet"):
+    if importlib.util.find_spec(mod) is not None:
+        hiddenimports.append(mod)
 
 # 剔除无用大件, 显著减小体积
 excludes = [
@@ -108,8 +121,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName": "pdfread",
             "CFBundleDisplayName": "PDF 对照阅读器",
-            "CFBundleShortVersionString": "0.3.7",
-            "CFBundleVersion": "0.3.7",
+            "CFBundleShortVersionString": "0.4.0",
+            "CFBundleVersion": "0.4.0",
             "NSHighResolutionCapable": True,
             # 后台服务型应用, 不在 Dock 常驻图标可改为 True
             "LSBackgroundOnly": False,

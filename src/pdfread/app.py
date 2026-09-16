@@ -13,6 +13,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -133,9 +134,36 @@ LOG_CONFIG = {
 }
 
 
+def _run_native_window(url: str) -> bool:
+    """用 pywebview 开原生窗口。
+
+    返回 True 表示窗口成功运行并已关闭(主线程一直阻塞到用户关窗);
+    返回 False 表示原生窗口不可用, 调用方应回退浏览器模式。
+    """
+    try:
+        import webview
+    except Exception:
+        return False
+    try:
+        webview.create_window(
+            "pdfread",
+            url,
+            width=1440,
+            height=900,
+            min_size=(960, 600),
+            text_select=True,
+        )
+        webview.start()
+        return True
+    except Exception:
+        return False
+
+
 def main() -> None:
     _ensure_console_streams()
     try:
+        import uvicorn
+
         from . import server
 
         provider = os.environ.get("PDFREAD_PROVIDER", "deepseek")
@@ -151,17 +179,31 @@ def main() -> None:
         port = _free_port(host)
         url = f"http://{host}:{port}"
 
-        threading.Timer(1.2, lambda: _open_window(url)).start()
-
-        import uvicorn
-
-        uvicorn.run(
+        # 服务跑在后台线程, 主线程交给原生窗口(或浏览器回退)
+        config = uvicorn.Config(
             server.app,
             host=host,
             port=port,
             log_level="warning",
             log_config=LOG_CONFIG,
         )
+        srv = uvicorn.Server(config)
+        srv_thread = threading.Thread(target=srv.run, daemon=True)
+        srv_thread.start()
+
+        # 等服务就绪, 避免窗口先打开时连接被拒
+        deadline = time.time() + 10
+        while not getattr(srv, "started", False) and time.time() < deadline:
+            time.sleep(0.05)
+
+        if _run_native_window(url):
+            # 原生窗口被用户关闭 -> 停服务退出, 生命周期一致
+            srv.should_exit = True
+            return
+
+        # 回退: 浏览器应用模式, 主线程挂住等服务
+        threading.Timer(0.5, lambda: _open_window(url)).start()
+        srv_thread.join()
 
     except Exception as e:  # 双击启动时没有终端, 必须弹窗
         _alert("pdfread 启动失败", f"{type(e).__name__}: {e}")

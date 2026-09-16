@@ -18,7 +18,8 @@
 
 Intel 芯片的 Mac 也下载上面这个 dmg，系统会自动通过 Rosetta 2 运行。
 
-解压后双击 `pdfread` 即可，浏览器会自动打开。首次使用点右上角「设置」填入 API Key。
+解压后双击 `pdfread` 即可。启动后会打开**原生窗口**（Windows 用 WebView2，macOS 用 WKWebView），
+环境不支持时自动回退为浏览器应用模式窗口。首次使用点右上角「设置」填入 API Key。
 
 > **macOS 首次打开**：当前版本未使用 Apple Developer ID 签名和 Notarization（公证），
 > 因此 Gatekeeper 可能提示「无法验证是否包含可能危害 Mac 安全或泄漏隐私的恶意软件」。
