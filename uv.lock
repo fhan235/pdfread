@@ -237,7 +237,7 @@ wheels = [
 
 [[package]]
 name = "pdfread"
-version = "0.4.3"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "clr-loader", marker = "sys_platform == 'win32'" },
