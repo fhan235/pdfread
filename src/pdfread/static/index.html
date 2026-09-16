@@ -128,9 +128,11 @@
   .para .src {
     display: none; margin-top: 7px; padding-top: 7px;
     border-top: 1px dashed var(--line);
-    color: var(--dim); font-size: .88em; font-style: italic;
+    color: var(--dim); font-size: .88em;
     line-height: 1.6; text-align: left;
   }
+  /* 原文斜体: 默认关闭, 可在设置中开启 */
+  body.italic-src .para .src { font-style: italic; }
   .para.show-src .src { display: block; }
   .para.err { color: #ff7a7a; }
   .skeleton { color: var(--dim); }
@@ -239,6 +241,7 @@
 
   <button id="btnOpen" class="ghost" title="选择或上传 PDF">打开</button>
   <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
+  <button id="btnTheme" class="ghost" title="切换深色/浅色主题">深色</button>
   <label>页</label>
   <input id="pStart" type="number" min="1" value="1" style="width:62px" />
   <span style="color:var(--dim)">–</span>
@@ -342,6 +345,8 @@
             <button data-v="tronly">仅译文</button>
           </div>
         </div>
+        <label class="chk"><input type="checkbox" id="cbItalic" />
+          原文用斜体显示</label>
       </div>
 
       <div class="sec">
@@ -711,7 +716,7 @@ window.addEventListener("drop", (e) => {
 /* ---------------- 阅读偏好(存 localStorage) ---------------- */
 const PREF_KEY = "pdfread.prefs";
 let prefs = { theme: "dark", font: "15", layout: "side",
-              expFmt: "txt", expSrc: "dst" };
+              expFmt: "txt", expSrc: "dst", italicSrc: false };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
@@ -722,10 +727,15 @@ function savePrefs() {
 }
 function applyPrefs() {
   document.body.classList.toggle("light", prefs.theme === "light");
+  document.body.classList.toggle("italic-src", !!prefs.italicSrc);
   document.documentElement.style.setProperty("--rfs", prefs.font + "px");
   const m = document.querySelector("main");
   m.classList.toggle("stacked", prefs.layout === "stack");
   m.classList.toggle("tronly", prefs.layout === "tronly");
+  const tb = $("#btnTheme");
+  if (tb) tb.textContent = prefs.theme === "light" ? "浅色" : "深色";
+  const ci = $("#cbItalic");
+  if (ci) ci.checked = !!prefs.italicSrc;
   syncSeg("segTheme", prefs.theme);
   syncSeg("segFont", prefs.font);
   syncSeg("segLayout", prefs.layout);
@@ -984,6 +994,17 @@ document.querySelectorAll("#segPaper button").forEach((b) => {
 for (const [id, key] of Object.entries(PM_BOXES)) {
   $("#" + id).onchange = (e) => saveParse({ [key]: e.target.checked });
 }
+
+$("#btnTheme").onclick = () => {
+  prefs.theme = prefs.theme === "light" ? "dark" : "light";
+  savePrefs();
+  applyPrefs();
+};
+$("#cbItalic").onchange = (e) => {
+  prefs.italicSrc = e.target.checked;
+  savePrefs();
+  applyPrefs();
+};
 
 $("#btnExport").onclick = doExport;
 $("#btnExp").onclick = doExport;
