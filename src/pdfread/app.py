@@ -34,6 +34,51 @@ def _free_port(host: str = "127.0.0.1", start: int = 8011) -> int:
         return s.getsockname()[1]
 
 
+def _open_window(url: str) -> None:
+    """优先以浏览器应用模式打开(无地址栏/标签页的独立窗口)。
+
+    依次尝试 Edge / Chrome 的 --app 模式; 找不到则回退为普通标签页。
+    应用模式窗口在任务栏/Dock 有独立条目, 体验接近原生窗口。
+    """
+    import shutil
+    import subprocess
+
+    candidates: list[list[str]] = []
+    if sys.platform == "win32":
+        for exe in ("msedge", "chrome"):
+            p = shutil.which(exe)
+            if p:
+                candidates.append([p, f"--app={url}"])
+        for pth in (
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        ):
+            if os.path.isfile(pth):
+                candidates.append([pth, f"--app={url}"])
+    elif sys.platform == "darwin":
+        for app_name in ("Google Chrome", "Microsoft Edge"):
+            candidates.append(
+                ["open", "-na", app_name, "--args", f"--app={url}"]
+            )
+    else:
+        for exe in ("google-chrome", "chromium", "microsoft-edge"):
+            p = shutil.which(exe)
+            if p:
+                candidates.append([p, f"--app={url}"])
+
+    for cmd in candidates:
+        try:
+            subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return
+        except Exception:
+            continue
+    webbrowser.open(url)
+
+
 def _alert(title: str, msg: str) -> None:
     """尽力用系统弹窗提示错误, 失败则退回标准错误输出。"""
     try:
@@ -106,7 +151,7 @@ def main() -> None:
         port = _free_port(host)
         url = f"http://{host}:{port}"
 
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+        threading.Timer(1.2, lambda: _open_window(url)).start()
 
         import uvicorn
 
