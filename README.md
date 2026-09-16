@@ -13,9 +13,10 @@
 | 系统 | 文件 |
 |---|---|
 | Windows | `pdfread-windows-x64.zip` |
-| macOS (Apple Silicon) | `pdfread-macos-arm64.dmg` |
-| macOS (Intel) | `pdfread-macos-x64.dmg` |
+| macOS | `pdfread-macos-arm64.dmg` |
 | Linux | `pdfread-linux-x64.tar.gz` |
+
+Intel 芯片的 Mac 也下载上面这个 dmg，系统会自动通过 Rosetta 2 运行。
 
 解压后双击 `pdfread` 即可，浏览器会自动打开。首次使用点右上角「设置」填入 API Key。
 

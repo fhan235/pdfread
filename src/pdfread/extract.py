@@ -98,6 +98,12 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
             if not text.strip():
                 continue
             x0, y0, x1, y1 = ln["bbox"]
+            size = max(s.get("size", 0.0) for s in spans)
+            # 过滤旋转/竖排文本(如 arXiv 侧边水印):
+            # 字符数不少却挤在极窄的横向范围内, 说明是旋转排布
+            n = len(text.strip())
+            if n > 8 and (x1 - x0) < n * max(size, 1.0) * 0.18:
+                continue
             out.append(
                 Line(
                     text=text.rstrip(),
@@ -105,7 +111,7 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
                     y0=round(y0, 1),
                     x1=round(x1, 1),
                     y1=round(y1, 1),
-                    size=round(max(s.get("size", 0.0) for s in spans), 1),
+                    size=round(size, 1),
                     bold=any(
                         "bold" in s.get("font", "").lower() for s in spans
                     ),
@@ -117,31 +123,117 @@ def _page_lines(page: pymupdf.Page) -> list[Line]:
 # ---------- 分栏检测 ----------
 
 def _split_columns(lines: list[Line], page_w: float) -> list[list[Line]]:
-    """按 x0 聚类检测分栏。返回按阅读顺序排列的每列行集合。"""
-    if len(lines) < 8:
-        return [lines]
+    """按阅读顺序把页面行切分为若干组: 通栏带 / 双栏带的左栏 / 右栏。
 
-    # 只用正文行(排除跨栏的大标题)参与判断
-    body = [l for l in lines if l.x1 - l.x0 > page_w * 0.08]
-    if not body:
-        return [lines]
+    双栏论文的阅读顺序是"从上到下, 从左到右":
+    页面先被通栏元素(标题、作者、跨栏表格)横向切成若干水平带,
+    带与带之间按 y 顺序; 每个双栏带内部则左栏整列读完再读右栏。
+
+    因此不能简单地"把所有通栏行提到最前", 也不能对全页做全局 y 排序 ——
+    前者会让页中部的跨栏元素跑到页首, 后者会把左右栏交错洗牌。
+    """
+    if len(lines) < 8:
+        return [sorted(lines, key=lambda l: (l.y0, l.x0))]
 
     mid = page_w / 2
-    left = [l for l in body if l.x1 <= mid + page_w * 0.04]
-    right = [l for l in body if l.x0 >= mid - page_w * 0.04]
 
-    # 双栏成立条件: 两侧都有足够多的行, 且几乎没有跨栏正文行
-    cross = [l for l in body if l.x0 < mid < l.x1 and l.x1 - l.x0 > page_w * 0.55]
-    if len(left) >= 5 and len(right) >= 5 and len(cross) <= len(body) * 0.15:
-        others = [l for l in lines if l not in left and l not in right]
-        cols = []
-        if others:
-            cols.append(sorted(others, key=lambda l: (l.y0, l.x0)))
-        cols.append(sorted(left, key=lambda l: (l.y0, l.x0)))
-        cols.append(sorted(right, key=lambda l: (l.y0, l.x0)))
-        return [c for c in cols if c]
+    def is_full(l: Line) -> bool:
+        """是否为跨栏(通栏)行。"""
+        if not (l.x0 < mid < l.x1):
+            return False
+        # 足够宽 -> 通栏正文/摘要
+        if l.x1 - l.x0 > page_w * 0.45:
+            return True
+        # 或者水平居中 -> 居中的标题、作者、单位行
+        return abs((l.x0 + l.x1) / 2 - mid) <= page_w * 0.04
 
-    return [sorted(lines, key=lambda l: (l.y0, l.x0))]
+    # 判断是否真的存在双栏结构(只看较宽的非通栏行)
+    wide = [
+        l for l in lines
+        if l.x1 - l.x0 > page_w * 0.08 and not is_full(l)
+    ]
+    wl = [l for l in wide if (l.x0 + l.x1) / 2 < mid]
+    wr = [l for l in wide if (l.x0 + l.x1) / 2 >= mid]
+    if len(wl) < 5 or len(wr) < 5:
+        return [sorted(lines, key=lambda l: (l.y0, l.x0))]
+
+    # 按 y 扫描, 用通栏行把页面切成交替的 通栏带 / 双栏带
+    key = lambda l: (l.y0, l.x0)
+    bands: list[tuple[str, list[Line]]] = []
+    cur_full: list[Line] = []
+    cur_cols: list[Line] = []
+    for l in sorted(lines, key=key):
+        if is_full(l):
+            if cur_cols:
+                bands.append(("cols", cur_cols))
+                cur_cols = []
+            cur_full.append(l)
+        else:
+            if cur_full:
+                bands.append(("full", cur_full))
+                cur_full = []
+            cur_cols.append(l)
+    if cur_full:
+        bands.append(("full", cur_full))
+    if cur_cols:
+        bands.append(("cols", cur_cols))
+
+    out: list[list[Line]] = []
+    for kind, group in bands:
+        if kind == "full":
+            out.append(sorted(group, key=key))
+            continue
+        left = [l for l in group if (l.x0 + l.x1) / 2 < mid]
+        right = [l for l in group if (l.x0 + l.x1) / 2 >= mid]
+        if left:
+            out.append(sorted(left, key=key))
+        if right:
+            out.append(sorted(right, key=key))
+    return [g for g in out if g]
+
+
+# 严格句末标点(用于碎片愈合与正文判定)。
+# 只认点号类: 括号/引号结尾的多半是表格单元格、图例或坐标轴标签,
+# 如 'Training steps (thousands)'、'LDM+VF loss (MAE) [16]' 并非完整句子。
+_HARD_SENT_END = re.compile(r"[.!?。！？]\s*$")
+
+
+def _heal_fragments(paras: list[Para]) -> list[Para]:
+    """合并被版面因素误断的正文碎片。
+
+    规则: 某正文段以小写字母/逗号类字符开头时, 向前(越过 note/caption/list,
+    但不越过 heading)找最近的正文段; 若它未以句末标点收尾, 说明二者本属
+    同一句, 把当前段并回前文。连字符断词直接拼合。
+
+    典型场景: 双栏页左栏底部的半句, 续文在右栏顶部, 中间隔着脚注/图注。
+    """
+    out: list[Para] = []
+    for p in paras:
+        if p.kind == "body":
+            ct = p.text.lstrip()
+            lower_start = ct[:1].islower() or ct[:1] in ",;:)"
+            if lower_start:
+                # 向前找最近的正文段。可越过 note/caption/list/heading:
+                # 真实章节标题之后必然另起新句(大写开头), 小写开头意味着
+                # 中间的"标题"是图内文字等误判, 句子被版面隔断
+                j = len(out) - 1
+                while j >= 0 and out[j].kind != "body":
+                    j -= 1
+                if j >= 0 and out[j].kind == "body":
+                    prev = out[j]
+                    pt = prev.text.rstrip()
+                    hyphen = bool(_HYPHEN_END.search(pt))
+                    open_end = not _HARD_SENT_END.search(pt)
+                    if hyphen or open_end:
+                        if hyphen:
+                            prev.text = _HYPHEN_END.sub(r"\1", pt) + ct
+                        else:
+                            prev.text = pt + " " + ct
+                        continue  # 当前段已并入前文, 不再单列
+        out.append(p)
+    for i, p in enumerate(out):
+        p.idx = i
+    return out
 
 
 # ---------- 段落重建 ----------
@@ -238,12 +330,14 @@ def _classify(text: str, size: float, bold: bool, body_size: float) -> str:
         return "note"
     if _CAPTION.match(text):
         return "caption"
-    if _LIST_START.match(text):
-        return "list"
+    # 标题判定先于列表: '1. Introduction' 这类章节标题以数字开头,
+    # 但字号/加粗特征应先按标题归类
     if (size > body_size * 1.12 or (bold and size >= body_size)) and len(text) < 220:
         return "heading"
+    if _LIST_START.match(text):
+        return "list"
     # 短小的非句子片段多为图表内标签, 归为标注以便前端紧凑排版
-    if len(text) < 45 and not _SENT_END.search(text.strip()):
+    if len(text) < 80 and not _HARD_SENT_END.search(text.strip()):
         return "note"
     return "body"
 
@@ -318,8 +412,10 @@ def _extract_document(doc, skip_references: bool):
                     Para(idx=len(paras), text=text, kind=kind, y=y)
                 )
 
-        # 按纵坐标恢复阅读顺序并重编号
+        # 保持当前的纵向对照阅读方式：同一高度的左右栏内容相邻出现。
+        # 这适合在 PDF 原版页面旁按视觉位置阅读；之后可考虑做成可选模式。
         paras.sort(key=lambda p: p.y)
+        paras = _heal_fragments(paras)
         for i, p in enumerate(paras):
             p.idx = i
         pages.append(paras)
