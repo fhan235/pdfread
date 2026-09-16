@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF 双栏对照阅读器</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1a1d26;
+    --line: #2a2f3d;
+    --fg: #e6e8ee;
+    --dim: #8b93a7;
+    --accent: #4f8cff;
+    --ok: #3ecf8e;
+    --warn: #ffb020;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ---------- 顶栏 ---------- */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  header .title {
+    font-weight: 600; max-width: 32vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  header .meta { color: var(--dim); font-size: 12px; }
+  .spacer { flex: 1; }
+  button {
+    background: var(--accent); color: #fff; border: 0;
+    padding: 7px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 500;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { background: #39405200; border: 1px solid var(--line);
+                    color: var(--dim); cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line);
+                 color: var(--fg); }
+  input, select {
+    background: #0e1016; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 9px; font-size: 13px;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); }
+  label { color: var(--dim); font-size: 12px; }
+
+  /* ---------- 进度条 ---------- */
+  #bar { height: 2px; background: var(--line); flex: 0 0 auto; }
+  #bar > div { height: 100%; width: 0; background: var(--ok);
+               transition: width .25s; }
+
+  /* ---------- 主体 ---------- */
+  main { flex: 1; display: flex; min-height: 0; }
+  .pane { flex: 1; overflow-y: auto; overflow-x: hidden;
+          scroll-behavior: auto; }
+  #left  { background: #0d0f14; border-right: 1px solid var(--line); }
+  #right { background: var(--bg); }
+
+  .pg { position: relative; padding: 14px 16px; }
+  .pg img { width: 100%; display: block; border-radius: 4px;
+            background: #fff; min-height: 120px; }
+  .pgno {
+    position: sticky; top: 0; z-index: 5;
+    display: inline-block; margin-bottom: 8px;
+    background: var(--panel); color: var(--dim);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px 11px; font-size: 11px; letter-spacing: .5px;
+  }
+
+  /* ---------- 译文 ---------- */
+  #right .pg { padding: 14px 26px 30px; max-width: 860px; }
+  .para { margin: 0 0 14px; cursor: default; border-radius: 5px;
+          padding: 3px 7px; margin-left: -7px; transition: background .12s;
+          font-size: 15px; line-height: 1.85; letter-spacing: .2px;
+          text-align: justify; }
+  .para:hover { background: #ffffff0a; }
+  .para.heading { font-size: 1.3em; font-weight: 650; line-height: 1.5;
+                  margin: 26px 0 12px; color: #fff; text-align: left; }
+  .para.caption { font-size: .9em; color: var(--dim); line-height: 1.7;
+                  border-left: 2px solid var(--line); padding-left: 10px;
+                  margin-bottom: 10px; }
+  .para.list { margin: 0 0 7px; padding-left: 16px; }
+  /* 图表标签 / 数据来源等次要标注: 紧凑排布, 不撑开版面 */
+  .para.note { display: inline-block; width: auto; max-width: 100%;
+               font-size: .84em; line-height: 1.55; color: var(--dim);
+               background: #ffffff08; border-radius: 4px;
+               margin: 0 5px 5px 0; padding: 1px 8px; vertical-align: top;
+               text-align: left; }
+  .para.note:hover { background: #ffffff14; }
+  .para .src {
+    display: none; margin-top: 7px; padding-top: 7px;
+    border-top: 1px dashed var(--line);
+    color: var(--dim); font-size: .88em; font-style: italic;
+    line-height: 1.6; text-align: left;
+  }
+  .para.show-src .src { display: block; }
+  .para.err { color: #ff7a7a; }
+  .skeleton { color: var(--dim); }
+  .skeleton::after {
+    content: ""; display: block; height: 11px; margin: 7px 0;
+    background: linear-gradient(90deg, #ffffff0d, #ffffff1a, #ffffff0d);
+    background-size: 200% 100%; border-radius: 4px;
+    animation: sk 1.2s infinite;
+  }
+  @keyframes sk { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
+
+  .empty { color: var(--dim); text-align: center; padding: 60px 20px; }
+  kbd { background: #0e1016; border: 1px solid var(--line);
+        border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+
+  /* ---------- 文件选择器 ---------- */
+  #picker { display: none; position: fixed; inset: 0; z-index: 50;
+            background: #000000b0; align-items: center; justify-content: center; }
+  #picker.on { display: flex; }
+  #picker .box { width: min(720px, 92vw); max-height: 80vh; display: flex;
+                 flex-direction: column; overflow: hidden; border-radius: 10px;
+                 background: var(--panel); border: 1px solid var(--line);
+                 box-shadow: 0 18px 50px #000000a0; }
+  #picker .bar { display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+                 border-bottom: 1px solid var(--line); }
+  #picker .path { padding: 8px 16px; font-size: 12px; color: var(--dim);
+                  background: #0e1016; word-break: break-all;
+                  border-bottom: 1px solid var(--line); }
+  #picker .list { overflow-y: auto; padding: 6px; flex: 1; min-height: 170px; }
+  #picker .row { display: flex; align-items: center; gap: 10px; font-size: 13px;
+                 padding: 8px 11px; border-radius: 6px; cursor: pointer; }
+  #picker .row:hover { background: #ffffff10; }
+  #picker .row .ico { width: 16px; text-align: center; color: var(--dim); }
+  #picker .row .nm { flex: 1; overflow: hidden; white-space: nowrap;
+                     text-overflow: ellipsis; }
+  #picker .row .sz { color: var(--dim); font-size: 11px; }
+  #picker .tip { padding: 10px 16px; font-size: 12px; color: var(--dim);
+                 border-top: 1px solid var(--line); }
+
+  /* ---------- 拖放提示 ---------- */
+  #drop { display: none; position: fixed; inset: 0; z-index: 60;
+          background: #4f8cff22; border: 3px dashed var(--accent);
+          align-items: center; justify-content: center; pointer-events: none;
+          font-size: 19px; font-weight: 600; color: #fff; }
+  #drop.on { display: flex; }
+
+  /* ---------- 设置面板 ---------- */
+  #cfg { display: none; position: fixed; inset: 0; z-index: 55;
+         background: #000000b0; align-items: center; justify-content: center; }
+  #cfg.on { display: flex; }
+  #cfg .box { width: min(480px, 92vw); border-radius: 10px; overflow: hidden;
+              background: var(--panel); border: 1px solid var(--line);
+              box-shadow: 0 18px 50px #000000a0; }
+  #cfg .bar { display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+              border-bottom: 1px solid var(--line); }
+  #cfg .body { padding: 16px; }
+  #cfg .fld { margin-bottom: 13px; }
+  #cfg .fld label { display: block; margin-bottom: 5px; }
+  #cfg .fld select, #cfg .fld input { width: 100%; }
+  #cfg .hint { font-size: 12px; color: var(--dim); min-height: 17px;
+               line-height: 1.5; }
+  #cfg .hint.ok { color: var(--ok); }
+  #cfg .hint.bad { color: #ff7a7a; }
+  #cfg .acts { display: flex; margin-top: 14px; }
+  #cfg .tip { padding: 11px 16px; font-size: 12px; color: var(--dim);
+              line-height: 1.6; border-top: 1px solid var(--line);
+              background: #0e1016; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title" id="docTitle">未加载文档</span>
+  <span class="meta" id="docMeta"></span>
+  <span class="spacer"></span>
+
+  <button id="btnOpen" class="ghost" title="选择或上传 PDF">打开</button>
+  <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
+  <label>页</label>
+  <input id="pStart" type="number" min="1" value="1" style="width:62px" />
+  <span style="color:var(--dim)">–</span>
+  <input id="pEnd" type="number" min="0" value="5" style="width:62px"
+         title="0 表示到最后一页" />
+
+  <button id="btnRun">开始翻译</button>
+  <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
+  <button id="btnSync" class="ghost">同步: 开</button>
+</header>
+
+<div id="bar"><div></div></div>
+
+<main>
+  <div class="pane" id="left"></div>
+  <div class="pane" id="right">
+    <div class="empty">
+      设置页码范围后点击 <b>开始翻译</b><br /><br />
+      <span style="font-size:12px">
+        译文会逐页流式出现，第一页几秒内即可阅读<br />
+        点击任意段落可展开对应原文 · <kbd>同步</kbd> 控制左右滚动联动
+      </span>
+    </div>
+  </div>
+</main>
+
+<div id="picker">
+  <div class="box">
+    <div class="bar">
+      <b>选择 PDF</b>
+      <span class="spacer"></span>
+      <button id="pkUp" class="ghost">上传文件</button>
+      <button id="pkClose" class="ghost">关闭</button>
+    </div>
+    <div class="path" id="pkPath"></div>
+    <div class="list" id="pkList"></div>
+    <div class="tip">
+      也可以直接把 PDF 拖到窗口任意位置
+      <input type="file" id="pkFile" accept="application/pdf" hidden />
+    </div>
+  </div>
+</div>
+<div id="drop">松手即可打开该 PDF</div>
+
+<div id="cfg">
+  <div class="box">
+    <div class="bar">
+      <b>翻译设置</b>
+      <span class="spacer"></span>
+      <button id="cfgClose" class="ghost">关闭</button>
+    </div>
+    <div class="body">
+      <div class="fld">
+        <label>翻译服务</label>
+        <select id="cfgProvider"></select>
+      </div>
+      <div class="fld">
+        <label>API Key</label>
+        <input id="cfgKey" type="password" autocomplete="off"
+               placeholder="粘贴密钥后点保存" />
+      </div>
+      <div class="hint" id="cfgHint"></div>
+      <div class="acts">
+        <span class="spacer"></span>
+        <button id="cfgSave">保存</button>
+      </div>
+    </div>
+    <div class="tip">
+      密钥保存在本机配置文件（权限 0600），不会上传到任何服务器。<br />
+      若已设置对应的环境变量，则环境变量优先生效。
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const left = $("#left"), right = $("#right");
+let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
+
+/* ---------------- 初始化 ---------------- */
+async function init() {
+  const r = await fetch("/api/info");
+  INFO = await r.json();
+
+  if (!INFO.loaded) {
+    $("#docTitle").textContent = "未加载 PDF";
+    $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
+    $("#btnRun").disabled = true;
+    left.innerHTML = "";
+    openPicker();
+    return;
+  }
+  $("#docTitle").textContent = INFO.title || INFO.name;
+  refreshMeta();
+  $("#btnRun").disabled = !INFO.ready;
+  if (!INFO.ready) {
+    $("#btnRun").title = INFO.warn;
+    right.innerHTML = `<div class="empty">尚未配置翻译服务密钥<br /><br />`
+      + `<span style="font-size:12px">点击右上角 <b>设置</b> 填写 API Key 即可开始</span></div>`;
+  }
+  $("#pEnd").value = Math.min(5, INFO.pages);
+  buildLeft();
+}
+
+/* ------------- 左栏：懒加载页面位图 ------------- */
+function buildLeft() {
+  left.innerHTML = "";
+  for (let i = 1; i <= INFO.pages; i++) {
+    const [w, h] = INFO.sizes[i - 1] || [612, 792];
+    const d = document.createElement("div");
+    d.className = "pg";
+    d.id = "L" + i;
+    d.innerHTML =
+      `<span class="pgno">${i} / ${INFO.pages}</span>` +
+      `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`;
+    left.appendChild(d);
+  }
+  // 进入视口才真正请求图片，98 页也不卡
+  const io = new IntersectionObserver((ents) => {
+    ents.forEach((e) => {
+      if (!e.isIntersecting) return;
+      const img = e.target;
+      if (!img.src) img.src = `/api/page/${img.dataset.p}.png?dpi=110`;
+      io.unobserve(img);
+    });
+  }, { rootMargin: "700px" });
+  left.querySelectorAll("img").forEach((i) => io.observe(i));
+}
+
+/* ---------------- 翻译（SSE 流式） ---------------- */
+function run() {
+  if (running) { es && es.close(); finish(); return; }
+
+  const s = Math.max(1, +$("#pStart").value || 1);
+  const e = Math.max(0, +$("#pEnd").value || 0);
+
+  right.innerHTML = "";
+  const lim = e === 0 ? INFO.pages : Math.min(e, INFO.pages);
+  for (let i = s; i <= lim; i++) {
+    const d = document.createElement("div");
+    d.className = "pg"; d.id = "R" + i;
+    d.innerHTML =
+      `<span class="pgno">${i} / ${INFO.pages}</span>` +
+      `<div class="skeleton">翻译中…</div>`;
+    right.appendChild(d);
+  }
+
+  running = true;
+  $("#btnRun").textContent = "停止";
+  let done = 0, total = lim - s + 1;
+
+  es = new EventSource(`/api/translate?start=${s}&end=${e}`);
+
+  es.addEventListener("page", (ev) => {
+    const d = JSON.parse(ev.data);
+    renderPage(d.page, d.items);
+    done++;
+    $("#bar > div").style.width = (done / total * 100) + "%";
+  });
+  es.addEventListener("done", () => { es.close(); finish(); });
+  es.onerror = () => { es.close(); finish(); };
+}
+
+function finish() {
+  running = false;
+  $("#btnRun").textContent = "开始翻译";
+  setTimeout(() => ($("#bar > div").style.width = "0"), 900);
+}
+
+function renderPage(n, items) {
+  const box = document.getElementById("R" + n);
+  if (!box) return;
+  const head = `<span class="pgno">${n} / ${INFO.pages}</span>`;
+  if (!items.length) {
+    box.innerHTML = head + `<div class="skeleton" style="opacity:.4">（本页无正文）</div>`;
+    return;
+  }
+  box.innerHTML = head + items.map((it) => {
+    const bad = it.dst.startsWith("[翻译失败]");
+    const dst = tidy(it.dst || it.src);
+    return `<div class="para ${it.kind}${bad ? " err" : ""}${showSrc ? " show-src" : ""}">`
+      + `<div class="dst">${esc(dst)}</div>`
+      + `<div class="src">${esc(it.src)}</div></div>`;
+  }).join("");
+}
+
+/* 清理模型返回的多余换行/空白，避免译文出现大量断行 */
+function tidy(s) {
+  return s.replace(/\r/g, "")
+          .replace(/\s*\n\s*/g, " ")
+          .replace(/[ \t\u3000]{2,}/g, " ")
+          .trim();
+}
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ---------------- 滚动同步 ---------------- */
+let lock = 0;
+function topPage(pane, prefix) {
+  const y = pane.scrollTop;
+  const kids = pane.children;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i];
+    if (k.offsetTop + k.offsetHeight > y + 40) {
+      return { n: +k.id.slice(1), frac: (y - k.offsetTop) / (k.offsetHeight || 1) };
+    }
+  }
+  return null;
+}
+function sync(from, to) {
+  if (!syncOn || lock) return;
+  const cur = topPage(from);
+  if (!cur) return;
+  const tgt = to.querySelector("#" + (to === left ? "L" : "R") + cur.n);
+  if (!tgt) return;
+  lock = 1;
+  to.scrollTop = tgt.offsetTop + Math.max(0, cur.frac) * tgt.offsetHeight;
+  requestAnimationFrame(() => (lock = 0));
+}
+left.addEventListener("scroll", () => sync(left, right), { passive: true });
+right.addEventListener("scroll", () => sync(right, left), { passive: true });
+
+/* ---------------- 交互 ---------------- */
+$("#btnRun").onclick = run;
+$("#btnSync").onclick = (e) => {
+  syncOn = !syncOn;
+  e.target.textContent = "同步: " + (syncOn ? "开" : "关");
+};
+$("#btnSrc").onclick = () => {
+  showSrc = !showSrc;
+  right.querySelectorAll(".para").forEach((p) =>
+    p.classList.toggle("show-src", showSrc));
+};
+right.addEventListener("click", (e) => {
+  const p = e.target.closest(".para");
+  if (p) p.classList.toggle("show-src");
+});
+
+/* ---------------- 文件选择 / 上传 ---------------- */
+function openPicker() { $("#picker").classList.add("on"); loadDir(""); }
+function closePicker() { $("#picker").classList.remove("on"); }
+
+async function loadDir(dir) {
+  const box = $("#pkList");
+  box.innerHTML = `<div class="row"><span class="nm" style="color:var(--dim)">加载中…</span></div>`;
+  let d;
+  try {
+    const r = await fetch("/api/browse?dir=" + encodeURIComponent(dir));
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    d = await r.json();
+  } catch (e) {
+    box.innerHTML = `<div class="row"><span class="nm" style="color:#ff7a7a">${esc(String(e))}</span></div>`;
+    return;
+  }
+
+  $("#pkPath").textContent = d.cwd || "可访问的目录";
+  const rows = [];
+  if (d.parent) rows.push(`<div class="row" data-dir="${esc(d.parent)}">`
+    + `<span class="ico">↑</span><span class="nm">上一级</span></div>`);
+  for (const x of d.dirs) rows.push(`<div class="row" data-dir="${esc(x.path)}">`
+    + `<span class="ico">▸</span><span class="nm">${esc(x.name)}</span></div>`);
+  for (const f of d.files) rows.push(`<div class="row" data-file="${esc(f.path)}">`
+    + `<span class="ico">▪</span><span class="nm">${esc(f.name)}</span>`
+    + `<span class="sz">${(f.size / 1048576).toFixed(1)} MB</span></div>`);
+  if (!rows.length) rows.push(`<div class="row"><span class="nm" style="color:var(--dim)">`
+    + `此目录下没有 PDF，可点「上传文件」或拖入</span></div>`);
+  box.innerHTML = rows.join("");
+}
+
+$("#pkList").addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  if (row.dataset.dir) loadDir(row.dataset.dir);
+  else if (row.dataset.file) openFile(row.dataset.file);
+});
+
+async function openFile(path) {
+  closePicker();
+  setBusy("正在解析 " + path.split(/[/\\]/).pop() + " …");
+  try {
+    const r = await fetch("/api/open?path=" + encodeURIComponent(path), { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    await reload();
+  } catch (e) { setBusy("打开失败：" + e, true); }
+}
+
+async function uploadFile(file) {
+  if (!file || !/\.pdf$/i.test(file.name)) { setBusy("仅支持 PDF 文件", true); return; }
+  closePicker();
+  setBusy(`正在上传 ${file.name}（${(file.size / 1048576).toFixed(1)} MB）…`);
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    await reload();
+  } catch (e) { setBusy("上传失败：" + e, true); }
+}
+
+function setBusy(msg, err) {
+  right.innerHTML = `<div class="empty"${err ? ' style="color:#ff7a7a"' : ""}>${esc(msg)}</div>`;
+}
+
+async function reload() {
+  if (es) { es.close(); es = null; }
+  running = false;
+  $("#btnRun").textContent = "开始翻译";
+  $("#btnRun").disabled = false;
+  right.innerHTML = `<div class="empty">设置页码范围后点击 <b>开始翻译</b></div>`;
+  await init();
+}
+
+$("#btnOpen").onclick = openPicker;
+$("#pkClose").onclick = closePicker;
+$("#pkUp").onclick = () => $("#pkFile").click();
+$("#pkFile").onchange = (e) => uploadFile(e.target.files[0]);
+$("#picker").addEventListener("click", (e) => {
+  if (e.target.id === "picker") closePicker();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePicker();
+});
+
+/* 拖放打开 */
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => {
+  e.preventDefault();
+  if (++dragDepth === 1) $("#drop").classList.add("on");
+});
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("dragleave", (e) => {
+  e.preventDefault();
+  if (--dragDepth <= 0) { dragDepth = 0; $("#drop").classList.remove("on"); }
+});
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0; $("#drop").classList.remove("on");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) uploadFile(f);
+});
+
+/* ---------------- 设置 ---------------- */
+let CFG = null;
+
+async function openCfg() {
+  $("#cfg").classList.add("on");
+  $("#cfgHint").textContent = "加载中…";
+  $("#cfgHint").className = "hint";
+  try {
+    CFG = await (await fetch("/api/settings")).json();
+  } catch (e) {
+    $("#cfgHint").textContent = "读取设置失败：" + e;
+    $("#cfgHint").className = "hint bad";
+    return;
+  }
+  $("#cfgProvider").innerHTML = CFG.items.map((it) =>
+    `<option value="${esc(it.provider)}"${it.provider === CFG.current ? " selected" : ""}>`
+    + `${esc(it.provider)} — ${esc(it.model)}</option>`).join("");
+  syncCfgHint();
+}
+
+function syncCfgHint() {
+  const it = (CFG?.items || []).find((x) => x.provider === $("#cfgProvider").value);
+  const h = $("#cfgHint"), inp = $("#cfgKey");
+  if (!it) { h.textContent = ""; return; }
+  inp.value = "";
+  if (!it.needs_key) {
+    inp.disabled = true;
+    inp.placeholder = "该服务无需密钥";
+    h.textContent = "本地服务，无需配置密钥";
+    h.className = "hint ok";
+    return;
+  }
+  inp.disabled = false;
+  inp.placeholder = it.configured ? "已配置（留空则保持不变）" : "粘贴密钥后点保存";
+  if (it.from_env) {
+    h.textContent = `已由环境变量 ${it.key_env} 提供，优先生效`;
+    h.className = "hint ok";
+  } else if (it.configured) {
+    h.textContent = `${it.key_env} 已保存在本机`;
+    h.className = "hint ok";
+  } else {
+    h.textContent = `尚未配置 ${it.key_env}`;
+    h.className = "hint bad";
+  }
+}
+
+async function saveCfg() {
+  const body = { provider: $("#cfgProvider").value };
+  const k = $("#cfgKey").value.trim();
+  if (k) body.key = k;
+  $("#cfgHint").textContent = "保存中…";
+  $("#cfgHint").className = "hint";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    INFO = await r.json();
+    $("#cfgKey").value = "";
+    CFG = await (await fetch("/api/settings")).json();
+    syncCfgHint();
+    $("#cfgHint").textContent = "已保存";
+    $("#cfgHint").className = "hint ok";
+    $("#btnRun").disabled = !(INFO.ready && INFO.loaded);
+    if (INFO.loaded) refreshMeta();
+    setTimeout(() => $("#cfg").classList.remove("on"), 600);
+  } catch (e) {
+    $("#cfgHint").textContent = "保存失败：" + e;
+    $("#cfgHint").className = "hint bad";
+  }
+}
+
+function refreshMeta() {
+  $("#docMeta").textContent =
+    `${INFO.pages} 页 · ${(INFO.chars / 10000).toFixed(1)} 万字符 · `
+    + `${INFO.paras} 段 · ${INFO.provider}/${INFO.model}`;
+  if (!INFO.ready) {
+    $("#docMeta").innerHTML +=
+      ` <span style="color:var(--warn)">· ${esc(INFO.warn)}</span>`;
+  }
+}
+
+$("#btnCfg").onclick = openCfg;
+$("#cfgClose").onclick = () => $("#cfg").classList.remove("on");
+$("#cfgSave").onclick = saveCfg;
+$("#cfgProvider").onchange = syncCfgHint;
+$("#cfg").addEventListener("click", (e) => {
+  if (e.target.id === "cfg") $("#cfg").classList.remove("on");
+});
+$("#cfgKey").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveCfg();
+});
+
+init();
+</script>
+</body>
+</html>

@@ -85,17 +85,25 @@ class TransConfig:
     timeout: float = 120.0
 
     def resolve(self) -> tuple[str, str, str]:
-        """返回 (base_url, model, api_key)。Key 只从环境变量取。"""
+        """返回 (base_url, model, api_key)。
+
+        密钥来源: 环境变量优先, 其次本地配置文件(界面中填写)。
+        """
+        from .settings import get_key
+
         preset = PROVIDERS.get(self.provider)
         if preset is None:
             raise ValueError(f"未知服务: {self.provider}")
         base_url = self.base_url or preset["base_url"]
         model = self.model or preset["model"]
         key_env = preset["key_env"]
-        api_key = os.environ.get(key_env, "") if key_env else "ollama"
-        if key_env and not api_key:
+        if not key_env:
+            return base_url, model, "local"
+        api_key = get_key(key_env)
+        if not api_key:
             raise RuntimeError(
-                f"缺少环境变量 {key_env}。请先 export {key_env}='你的key'"
+                f"尚未配置 {key_env}。可在界面右上角「设置」中填写, "
+                f"或设置环境变量 {key_env}"
             )
         return base_url, model, api_key
 
@@ -179,7 +187,7 @@ class Translator:
             "stream": False,
         }
         headers = {"Content-Type": "application/json"}
-        if self._key and self._key != "ollama":
+        if self._key and self._key != "local":
             headers["Authorization"] = f"Bearer {self._key}"
 
         last_err: Exception | None = None

@@ -1,12 +1,20 @@
-cache.db
-cache.db-journal
-*.db
+# Python
 __pycache__/
-*.pyc
-*.pyo
-.env
-.env.*
+*.py[cod]
+*.egg-info/
 .venv/
 venv/
+
+# 构建产物
+build/
+dist/
+*.spec.bak
+
+# 运行时数据
+*.db
+.env
+.env.*
+
+# 系统
 .DS_Store
 *.log

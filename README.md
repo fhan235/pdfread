@@ -4,46 +4,55 @@
 
 为"读论文/读报告"这一件事而做：**不保留排版，只要读得快、读得懂**。
 
-## 特点
-
-- **快**：98 页 PDF 解析 1.2 秒，单页渲染 40ms
-- **流式**：翻译好一页显示一页，第一页秒出，不用等全文跑完
-- **段落重建**：从行级别还原被 PDF 折断的自然段，避免半句送翻译
-- **省钱**：SQLite 缓存按段落去重，重开文档零费用；自动跳过页眉页脚与参考文献
-- **轻**：约 1000 行代码，4 个依赖，前端零构建
-
-## 为什么不用现成工具
-
-`pdf2zh` / `BabelDOC` 这类工具的目标是**产出一个排版一致的译文 PDF**，大部分耗时花在版面模型推理和原位回写上，且必须全文跑完才出文件。
-
-本项目的目标是**一个阅读界面**。跳过版面还原后，解析从数分钟降到 1 秒级，并且可以边翻边读。
-
 ## 安装
 
-需要 Python 3.10+。
+### 方式一：下载现成应用（推荐，无需 Python）
+
+到 [Releases](https://github.com/fhan235/pdfread/releases) 下载对应系统的文件：
+
+| 系统 | 文件 |
+|---|---|
+| Windows | `pdfread-windows-x64.zip` |
+| macOS (Apple Silicon) | `pdfread-macos-arm64.dmg` |
+| macOS (Intel) | `pdfread-macos-x64.dmg` |
+| Linux | `pdfread-linux-x64.tar.gz` |
+
+解压后双击 `pdfread` 即可，浏览器会自动打开。首次使用点右上角「设置」填入 API Key。
+
+> **macOS 首次打开**：因未做 Apple 公证，需右键点击 App →「打开」→ 再次确认。
+> 若提示「已损坏」，终端执行：`xattr -cr /Applications/pdfread.app`
+>
+> **Windows**：若被 SmartScreen 拦截，点「更多信息」→「仍要运行」。
+
+### 方式二：从源码运行
 
 ```bash
-pip install pymupdf fastapi uvicorn httpx
+pip install git+https://github.com/fhan235/pdfread.git
+pdfread paper.pdf
 ```
+
+或者克隆后用 `run.sh`（Linux/macOS）、`run.bat`（Windows），脚本会自动准备环境。
 
 ## 使用
 
 ```bash
-export DEEPSEEK_API_KEY='sk-...'
-python server.py --pdf /path/to/paper.pdf
+pdfread                      # 不指定文件，在界面中选择
+pdfread paper.pdf            # 直接打开
+pdfread paper.pdf --open     # 并自动打开浏览器
 ```
-
-浏览器打开 http://127.0.0.1:8011 ，填写页码范围（`0` 表示到最后一页），点「开始翻译」。
-
-### 界面操作
 
 | 操作 | 说明 |
 |---|---|
+| 顶栏「打开」 | 浏览目录或上传 PDF |
+| 拖放文件到窗口 | 直接打开 |
+| 顶栏「设置」 | 选择翻译服务、填写 API Key |
 | 点击段落 | 展开/收起对应英文原文 |
 | 顶栏「原文」 | 全局切换原文对照 |
 | 顶栏「同步」 | 开关左右滚动联动 |
 
-### 翻译服务
+## 翻译服务
+
+在界面「设置」中配置，或使用环境变量（环境变量优先）：
 
 | `--provider` | 环境变量 | 默认模型 |
 |---|---|---|
@@ -55,22 +64,9 @@ python server.py --pdf /path/to/paper.pdf
 
 任何 OpenAI 兼容接口都可用 `--base-url` + `--model` 接入。
 
-### 常用参数
-
-```
---pdf PATH           启动时加载的 PDF
---provider NAME      翻译服务
---model NAME         覆盖默认模型
---base-url URL       覆盖默认 API 地址
---concurrency N      并发请求数, 默认 8
---port N             监听端口, 默认 8011
---root DIR           追加允许访问的目录(可多次指定)
---cache PATH         缓存数据库路径, 默认 ./cache.db
-```
-
 ## 成本参考
 
-以 98 页 / 17 万字符的报告为例（约 4 万输入 + 5 万输出 tokens）：
+以 98 页 / 17 万字符的报告为例：
 
 | 服务 | 单次全文成本 |
 |---|---|
@@ -80,15 +76,12 @@ python server.py --pdf /path/to/paper.pdf
 
 命中缓存的段落不重复计费。
 
-## 结构
+## 特点
 
-```
-extract.py          PDF 文本提取与段落重建
-translate.py        并发翻译 + SQLite 缓存 + 多服务适配
-server.py           FastAPI: 页面位图渲染 + SSE 流式翻译
-static/index.html   前端界面(单文件, 无构建)
-run.sh              启动脚本
-```
+- **快**：98 页 PDF 解析 1.2 秒，单页渲染 40ms
+- **流式**：翻译好一页显示一页，第一页秒出，不用等全文跑完
+- **段落重建**：从行级别还原被 PDF 折断的自然段，避免半句送翻译
+- **省钱**：SQLite 缓存按段落去重，重开文档零费用；自动跳过页眉页脚与参考文献
 
 ### 段落重建
 
@@ -99,11 +92,39 @@ run.sh              启动脚本
 - 辅助判据：满行宽度、字号一致、行距、缩进、列表标记
 - 行尾连字符断词自动拼合（`en-` + `gineering` → `engineering`）
 
+## 结构
+
+```
+launcher.py             PyInstaller 打包入口
+pdfread.spec            打包配置
+src/pdfread/
+├── app.py              桌面应用入口（双击启动）
+├── cli.py              命令行入口
+├── server.py           FastAPI 服务
+├── extract.py          PDF 文本提取与段落重建
+├── translate.py        并发翻译 + SQLite 缓存
+├── settings.py         本地配置（API Key）
+├── paths.py            跨平台路径解析
+└── static/index.html   前端界面（单文件，无构建）
+```
+
+## 自行打包
+
+```bash
+pip install . pyinstaller
+pyinstaller --noconfirm pdfread.spec
+```
+
+产物在 `dist/`。注意 PyInstaller **不支持交叉编译**，需在目标系统上构建。
+本仓库的 GitHub Actions 会在推送 `v*` 标签时自动构建三平台产物。
+
 ## 安全
 
-- API Key 仅从环境变量读取，不落盘、不返回前端、不写日志
+- API Key 优先读环境变量，界面填写的保存在用户配置目录且权限为 `0600`
+- 密钥不会通过接口返回前端，不写入日志
 - 服务默认绑定 `127.0.0.1`
 - 文件访问限定在白名单目录内，防路径穿越
+- 上传限制扩展名与大小（200 MB）
 - 前端输出经 HTML 转义
 
 ## 已知限制
