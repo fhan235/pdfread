@@ -169,6 +169,10 @@
   #picker .row .sz { color: var(--dim); font-size: 11px; }
   #picker .tip { padding: 10px 16px; font-size: 12px; color: var(--dim);
                  border-top: 1px solid var(--line); }
+  #picker .addroot { display: flex; gap: 8px; padding: 10px 16px 4px;
+                     border-top: 1px solid var(--line); }
+  #picker .addroot input { flex: 1; font-size: 12.5px; }
+  #picker .addroot button { flex: 0 0 auto; font-size: 12px; padding: 6px 10px; }
 
   /* ---------- 拖放提示 ---------- */
   #drop { display: none; position: fixed; inset: 0; z-index: 60;
@@ -263,6 +267,10 @@
     </div>
     <div class="path" id="pkPath"></div>
     <div class="list" id="pkList"></div>
+    <div class="addroot">
+      <input id="pkRoot" placeholder="其他目录的完整路径，加入可访问范围" />
+      <button id="pkAddRoot" class="ghost" type="button">添加目录</button>
+    </div>
     <div class="tip">
       也可以直接把 PDF 拖到窗口任意位置
       <input type="file" id="pkFile" accept="application/pdf" hidden />
@@ -387,6 +395,7 @@ async function init() {
       setTimeout(openCfg, 350);
     }
   }
+  $("#pStart").value = 1;
   $("#pEnd").value = Math.min(5, INFO.pages);
   buildLeft();
 }
@@ -409,7 +418,9 @@ function buildLeft() {
     ents.forEach((e) => {
       if (!e.isIntersecting) return;
       const img = e.target;
-      if (!img.src) img.src = `/api/page/${img.dataset.p}.png?dpi=110`;
+      if (!img.src) {
+        img.src = `/api/page/${img.dataset.p}.png?dpi=110&v=${INFO.ver || ""}`;
+      }
       io.unobserve(img);
     });
   }, { rootMargin: "700px" });
@@ -567,6 +578,9 @@ $("#pkList").addEventListener("click", (e) => {
 });
 
 async function openFile(path) {
+  // 切换文件前停掉正在进行的翻译流, 避免旧数据写入新文档
+  if (es) { es.close(); es = null; }
+  running = false;
   closePicker();
   setBusy("正在解析 " + path.split(/[/\\]/).pop() + " …");
   try {
@@ -578,6 +592,8 @@ async function openFile(path) {
 
 async function uploadFile(file) {
   if (!file || !/\.pdf$/i.test(file.name)) { setBusy("仅支持 PDF 文件", true); return; }
+  if (es) { es.close(); es = null; }
+  running = false;
   closePicker();
   setBusy(`正在上传 ${file.name}（${(file.size / 1048576).toFixed(1)} MB）…`);
   const fd = new FormData();
@@ -604,6 +620,31 @@ async function reload() {
 $("#btnOpen").onclick = openPicker;
 $("#pkClose").onclick = closePicker;
 $("#pkUp").onclick = () => $("#pkFile").click();
+$("#pkAddRoot").onclick = addRoot;
+$("#pkRoot").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") addRoot();
+});
+
+async function addRoot() {
+  const inp = $("#pkRoot"), v = inp.value.trim();
+  if (!v) return;
+  const pathEl = $("#pkPath");
+  try {
+    const r = await fetch("/api/roots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: v }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    inp.value = "";
+    pathEl.style.color = "";
+    loadDir(d.dir || v);
+  } catch (e) {
+    pathEl.style.color = "#ff7a7a";
+    pathEl.textContent = "添加失败：" + e;
+  }
+}
 $("#pkFile").onchange = (e) => uploadFile(e.target.files[0]);
 $("#picker").addEventListener("click", (e) => {
   if (e.target.id === "picker") closePicker();

@@ -80,6 +80,12 @@ def _load(path: Path) -> None:
     STATE["doc"] = pymupdf.open(str(path))
     STATE["pages"] = pages
     STATE["sizes"] = sizes
+    # 文档版本标识: 前端以此区分浏览器缓存中的页面图片
+    try:
+        st = path.stat()
+        STATE["ver"] = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    except OSError:
+        STATE["ver"] = ""
 
 
 def _sse(event: str, data: dict) -> str:
@@ -111,6 +117,7 @@ def info() -> dict:
         "ready": ready,
         "warn": warn,
         "providers": sorted(PROVIDERS),
+        "roots": [str(r) for r in _roots()],
     }
 
     if STATE["doc"] is None:
@@ -125,9 +132,24 @@ def info() -> dict:
         "chars": sum(len(p.text) for pg in STATE["pages"] for p in pg),
         "paras": sum(len(pg) for pg in STATE["pages"]),
         "sizes": STATE["sizes"],
+        "ver": STATE.get("ver", ""),
         "title": doc.metadata.get("title") or "",
         **base,
     }
+
+
+@app.post("/api/roots")
+async def add_root(payload: dict) -> dict:
+    """把用户指定的目录加入可访问白名单(用户主动授权)。"""
+    raw = str(payload.get("path", "")).strip()
+    if not raw:
+        raise HTTPException(400, "路径为空")
+    p = Path(raw).expanduser().resolve()
+    if not p.is_dir():
+        raise HTTPException(404, f"目录不存在: {p}")
+    if not _within_roots(p):
+        STATE["roots"].append(p)
+    return {"roots": [str(r) for r in _roots()], "dir": str(p)}
 
 
 @app.get("/api/browse")
