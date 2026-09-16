@@ -162,6 +162,9 @@
   #cfg .fld { margin-bottom: 13px; }
   #cfg .fld label { display: block; margin-bottom: 5px; }
   #cfg .fld select, #cfg .fld input { width: 100%; }
+  #cfg .keywrap { display: flex; gap: 8px; }
+  #cfg .keywrap input { flex: 1; }
+  #cfg .keywrap button { flex: 0 0 auto; font-size: 12px; padding: 6px 10px; }
   #cfg .hint { font-size: 12px; color: var(--dim); min-height: 17px;
                line-height: 1.5; }
   #cfg .hint.ok { color: var(--ok); }
@@ -239,8 +242,11 @@
       </div>
       <div class="fld">
         <label>API Key</label>
-        <input id="cfgKey" type="password" autocomplete="off"
-               placeholder="粘贴密钥后点保存" />
+        <div class="keywrap">
+          <input id="cfgKey" type="password" autocomplete="off"
+                 placeholder="粘贴密钥后点保存" />
+          <button id="cfgEye" type="button" class="ghost" title="显示/隐藏">显示</button>
+        </div>
       </div>
       <div class="hint" id="cfgHint"></div>
       <div class="acts">
@@ -268,18 +274,21 @@ async function init() {
   if (!INFO.loaded) {
     $("#docTitle").textContent = "未加载 PDF";
     $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
-    $("#btnRun").disabled = true;
     left.innerHTML = "";
     openPicker();
     return;
   }
   $("#docTitle").textContent = INFO.title || INFO.name;
   refreshMeta();
-  $("#btnRun").disabled = !INFO.ready;
+  $("#btnRun").title = INFO.ready ? "" : INFO.warn;
   if (!INFO.ready) {
-    $("#btnRun").title = INFO.warn;
     right.innerHTML = `<div class="empty">尚未配置翻译服务密钥<br /><br />`
-      + `<span style="font-size:12px">点击右上角 <b>设置</b> 填写 API Key 即可开始</span></div>`;
+      + `<span style="font-size:12px">正在打开设置面板…</span></div>`;
+    // 首次打开自动弹出设置, 会话内只弹一次, 避免反复打扰
+    if (!sessionStorage.getItem("cfgPrompted")) {
+      sessionStorage.setItem("cfgPrompted", "1");
+      setTimeout(openCfg, 350);
+    }
   }
   $("#pEnd").value = Math.min(5, INFO.pages);
   buildLeft();
@@ -313,6 +322,8 @@ function buildLeft() {
 /* ---------------- 翻译（SSE 流式） ---------------- */
 function run() {
   if (running) { es && es.close(); finish(); return; }
+  if (!INFO || !INFO.loaded) { openPicker(); return; }
+  if (!INFO.ready) { openCfg(); return; }
 
   const s = Math.max(1, +$("#pStart").value || 1);
   const e = Math.max(0, +$("#pEnd").value || 0);
@@ -489,7 +500,6 @@ async function reload() {
   if (es) { es.close(); es = null; }
   running = false;
   $("#btnRun").textContent = "开始翻译";
-  $("#btnRun").disabled = false;
   right.innerHTML = `<div class="empty">设置页码范围后点击 <b>开始翻译</b></div>`;
   await init();
 }
@@ -588,7 +598,6 @@ async function saveCfg() {
     syncCfgHint();
     $("#cfgHint").textContent = "已保存";
     $("#cfgHint").className = "hint ok";
-    $("#btnRun").disabled = !(INFO.ready && INFO.loaded);
     if (INFO.loaded) refreshMeta();
     setTimeout(() => $("#cfg").classList.remove("on"), 600);
   } catch (e) {
@@ -609,6 +618,12 @@ function refreshMeta() {
 
 $("#btnCfg").onclick = openCfg;
 $("#cfgClose").onclick = () => $("#cfg").classList.remove("on");
+$("#cfgEye").onclick = () => {
+  const inp = $("#cfgKey"), eye = $("#cfgEye");
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  eye.textContent = show ? "隐藏" : "显示";
+};
 $("#cfgSave").onclick = saveCfg;
 $("#cfgProvider").onchange = syncCfgHint;
 $("#cfg").addEventListener("click", (e) => {
