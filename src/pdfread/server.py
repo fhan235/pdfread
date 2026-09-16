@@ -2,7 +2,7 @@
 
 安全说明:
 - 服务默认只绑定 127.0.0.1, 不对外暴露。
-- API Key 仅从环境变量读取, 不写入磁盘、不返回给前端。
+- API Key 从环境变量或本地设置读取，不返回给前端。
 - 文件访问限定在白名单目录内, 防止路径穿越。
 - 上传限制扩展名与大小。
 """
@@ -10,15 +10,21 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
+import multiprocessing
+import tempfile
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
-import pymupdf
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -26,13 +32,46 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
-from .extract import extract_pages
+from .pdfworker import inspect_pdf, render_page
 from .paths import static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
 MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
 
-app = FastAPI(title="PDF Bilingual Reader")
+_pool = None
+
+
+def _executor():
+    global _pool
+    if _pool is None:
+        _pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+    return _pool
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    global _pool
+    if _pool is not None:
+        _pool.shutdown(wait=True, cancel_futures=True)
+        _pool = None
+    if STATE["cache"] is not None:
+        STATE["cache"].close()
+        STATE["cache"] = None
+
+
+app = FastAPI(title="PDF Bilingual Reader", lifespan=lifespan)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
+
+
+@app.middleware("http")
+async def local_requests(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if request.headers.get("sec-fetch-site") == "cross-site" or (
+        origin and origin != f"{request.url.scheme}://{request.headers.get('host', '')}"
+    ):
+        return JSONResponse({"detail": "仅允许同源访问"}, status_code=403)
+    return await call_next(request)
 
 STATE: dict = {
     "pdf": None,
@@ -42,8 +81,7 @@ STATE: dict = {
     "roots": [],
     "cfg": None,
     "cache": None,
-    "paper": False,   # 当前文档是否按论文模式解析
-    "ver": "",
+    "docs": {},
 }
 
 
@@ -73,65 +111,39 @@ def _safe_resolve(raw: str) -> Path:
     return p
 
 
-def _load(path: Path) -> None:
-    if STATE["doc"] is not None:
-        try:
-            STATE["doc"].close()
-        except Exception:
-            pass
-
-    from . import paper as paper_mod
-    from .settings import get_parse
-
-    opt = get_parse()
-    mode = str(opt.get("paper_mode", "auto"))
-    use_paper = (
-        mode == "on"
-        or (mode == "auto" and paper_mod.looks_like_paper(str(path)))
-    )
-
-    if use_paper:
-        pages, sizes = paper_mod.extract_paper(
-            str(path),
-            skip_refs=bool(opt.get("skip_refs", True)),
-            skip_tables=bool(opt.get("skip_tables", True)),
-            mask_math=bool(opt.get("mask_math", True)),
-            fold_formula=bool(opt.get("fold_formula", True)),
-        )
-    else:
-        pages, sizes = extract_pages(str(path))
-
-    STATE["paper"] = use_paper
-    STATE["pdf"] = path
-    STATE["doc"] = pymupdf.open(str(path))
-    STATE["pages"] = pages
-    STATE["sizes"] = sizes
-    # 文档版本标识: 前端以此区分浏览器缓存中的页面图片
-    try:
-        st = path.stat()
-        STATE["ver"] = f"{st.st_mtime_ns:x}-{st.st_size:x}"
-    except OSError:
-        STATE["ver"] = ""
-
-    # 记录打开历史(失败不影响主流程)
+def _register(path: Path, data: dict, name: str | None = None) -> dict:
+    current = {**data, "path": path, "name": name or path.name, "id": uuid4().hex}
+    STATE["docs"][current["id"]] = current
+    while len(STATE["docs"]) > 16:
+        STATE["docs"].pop(next(iter(STATE["docs"])))
+    STATE.update(pdf=path, doc=current, pages=data["pages"], sizes=data["sizes"])
     try:
         from .settings import add_history
-
-        add_history(str(path), path.name)
+        add_history(str(path), current["name"])
     except Exception:
         pass
+    return current
 
 
-def _translatable(kind: str) -> bool:
-    """该类型是否需要送去翻译。"""
+def _load(path: Path, skip_references: bool = True) -> None:
     from .settings import get_parse
+    data = _executor().submit(inspect_pdf, str(path), skip_references, get_parse()).result()
+    _register(path, data)
 
-    opt = get_parse()
-    if kind == "figtext":
-        return bool(opt.get("translate_figtext", False))
-    if kind == "caption":
-        return bool(opt.get("translate_caption", True))
-    return kind in ("body", "heading", "list")
+
+async def _inspect(path: Path, skip_references: bool) -> dict:
+    from .settings import get_parse
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_executor(), inspect_pdf, str(path), skip_references, get_parse())
+    except Exception:
+        raise HTTPException(400, "PDF 无法解析，请确认文件完整、未加密且包含页面") from None
+
+
+def _document(doc: str = "") -> dict:
+    current = STATE["docs"].get(doc) if doc else STATE["doc"]
+    if current is None:
+        raise HTTPException(410 if doc else 400, "文档已过期，请重新打开" if doc else "尚未加载 PDF")
+    return current
 
 
 def _sse(event: str, data: dict) -> str:
@@ -146,7 +158,11 @@ def index() -> HTMLResponse:
 
 
 @app.get("/api/info")
-def info() -> dict:
+async def get_info(doc: str = "") -> dict:
+    return info(doc)
+
+
+def info(doc: str = "") -> dict:
     model, ready, warn = "", False, ""
     cfg: TransConfig | None = STATE["cfg"]
     if cfg is not None:
@@ -166,29 +182,22 @@ def info() -> dict:
         "roots": [str(r) for r in _roots()],
     }
 
-    if STATE["doc"] is None:
+    if not doc and STATE["doc"] is None:
         return {"loaded": False, **base}
 
-    doc = STATE["doc"]
-    # 只统计会送去翻译的内容, 便于界面显示真实工作量
-    tr_chars = sum(
-        len(p.text) for pg in STATE["pages"] for p in pg
-        if _translatable(getattr(p, "kind", "body"))
-    )
+    current = _document(doc)
     return {
         "loaded": True,
-        "name": STATE["pdf"].name,
-        "path": str(STATE["pdf"]),
-        "pages": doc.page_count,
-        "chars": tr_chars,
-        "paras": sum(
-            1 for pg in STATE["pages"] for p in pg
-            if _translatable(getattr(p, "kind", "body"))
-        ),
-        "sizes": STATE["sizes"],
-        "ver": STATE.get("ver", ""),
-        "paper_mode": bool(STATE.get("paper")),
-        "title": doc.metadata.get("title") or "",
+        "name": current["name"],
+        "path": str(current["path"]),
+        "pages": len(current["pages"]),
+        "chars": sum(len(p.text) for pg in current["pages"] for p in pg),
+        "paras": sum(len(pg) for pg in current["pages"]),
+        "sizes": current["sizes"],
+        "ver": current["id"],
+        "doc": current["id"],
+        "title": current["title"],
+        "paper_mode": bool(current.get("paper_mode")),
         **base,
     }
 
@@ -229,7 +238,7 @@ def browse(dir: str = "") -> dict:
     dirs, files = [], []
     try:
         for e in sorted(target.iterdir(), key=lambda x: x.name.lower()):
-            if e.name.startswith("."):
+            if e.name.startswith(".") or not _within_roots(e.resolve()):
                 continue
             if e.is_dir():
                 dirs.append({"name": e.name, "path": str(e)})
@@ -246,54 +255,79 @@ def browse(dir: str = "") -> dict:
     return {"cwd": str(target), "parent": parent, "dirs": dirs, "files": files}
 
 
+@app.get("/api/history")
+async def get_history_api() -> list[dict]:
+    from .settings import get_history
+    return [{"path": item.get("path", ""), "name": item.get("name", ""),
+             "exists": Path(str(item.get("path", ""))).is_file()}
+            for item in get_history() if isinstance(item, dict)]
+
+
+@app.post("/api/history/remove")
+async def remove_history_api(payload: dict) -> dict:
+    from .settings import remove_history
+    remove_history(str(payload.get("path", "")))
+    return {"ok": True}
+
+
 @app.post("/api/open")
-def open_pdf(path: str = Query(...)) -> dict:
-    _load(_safe_resolve(path))
-    return info()
+async def open_pdf(path: str = Query(...), skip_references: bool = True) -> dict:
+    target = _safe_resolve(path)
+    data = await _inspect(target, skip_references)
+    current = _register(target, data)
+    return info(current["id"])
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)) -> dict:
+async def upload(file: UploadFile = File(...), skip_references: bool = True) -> dict:
     """上传 PDF 并立即打开。存到用户缓存目录, 不污染安装目录。"""
-    name = os.path.basename(file.filename or "")
+    name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     if not name.lower().endswith(".pdf"):
         raise HTTPException(400, "仅支持 PDF 文件")
 
     dest_dir = uploads_dir()
-    dest = dest_dir / name
+    dest = dest_dir / f"{uuid4().hex}.pdf"
+    fd, raw = tempfile.mkstemp(prefix="upload-", suffix=".part", dir=dest_dir)
+    temporary = Path(raw)
 
     size = 0
     try:
-        with dest.open("wb") as fh:
+        with os.fdopen(fd, "wb") as fh:
             while chunk := await file.read(1 << 20):
                 size += len(chunk)
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "文件过大(上限 200 MB)")
                 fh.write(chunk)
-    except HTTPException:
-        dest.unlink(missing_ok=True)
-        raise
+        data = await _inspect(temporary, skip_references)
+        temporary.replace(dest)
+        current = _register(dest, data, name)
+    finally:
+        temporary.unlink(missing_ok=True)
+        await file.close()
 
     root = dest_dir.resolve()
     if root not in STATE["roots"]:
         STATE["roots"].append(root)
 
-    _load(dest)
-    return info()
+    return info(current["id"])
 
 
 @app.get("/api/settings")
-def get_settings() -> dict:
+async def get_settings() -> dict:
     """返回可配置项与各服务密钥的"是否已配置"状态(不返回密钥内容)。"""
-    from .settings import configured
+    from .settings import configured, profile
 
     done = configured()
     items = []
+    cfg = STATE["cfg"]
     for name in sorted(PROVIDERS):
         env = PROVIDERS[name]["key_env"]
+        saved = profile(name)
         items.append({
             "provider": name,
             "model": PROVIDERS[name]["model"],
+            "custom_model": cfg.model if cfg and cfg.provider == name else saved.get("model", ""),
+            "base_url": cfg.base_url if cfg and cfg.provider == name else saved.get("base_url", ""),
             "key_env": env,
             "needs_key": bool(env),
             "configured": (not env) or bool(done.get(env))
@@ -305,113 +339,75 @@ def get_settings() -> dict:
 
 
 @app.post("/api/settings")
-async def set_settings(payload: dict) -> dict:
+async def set_settings(payload: dict, doc: str = "") -> dict:
     """保存密钥 / 切换服务。密钥写入用户配置文件(权限 0600)。"""
-    from .settings import set_key, set_provider
-
-    provider = str(payload.get("provider", "")).strip()
-    if provider:
-        if provider not in PROVIDERS:
-            raise HTTPException(400, f"未知服务: {provider}")
-        cfg: TransConfig | None = STATE["cfg"]
-        if cfg is not None:
-            cfg.provider = provider
-            cfg.model = ""
-            cfg.base_url = ""
-        set_provider(provider)
-
+    from .settings import profile, update_translation
+    old = STATE["cfg"] or TransConfig()
+    provider = str(payload.get("provider", old.provider)).strip()
+    if provider not in PROVIDERS:
+        raise HTTPException(400, "未知翻译服务")
+    saved = profile(provider)
+    model = payload.get("model", old.model if provider == old.provider else saved.get("model", ""))
+    base_url = payload.get("base_url", old.base_url if provider == old.provider else saved.get("base_url", ""))
     key = payload.get("key")
-    if key is not None:
-        target = provider or (STATE["cfg"].provider if STATE["cfg"] else "")
-        env = PROVIDERS.get(target, {}).get("key_env", "")
-        if not env:
-            raise HTTPException(400, "该服务无需密钥")
-        set_key(env, str(key))
-
-    return info()
+    if not isinstance(model, str) or not isinstance(base_url, str) or (key is not None and not isinstance(key, str)):
+        raise HTTPException(400, "设置值必须为字符串")
+    if key is not None and not PROVIDERS[provider]["key_env"]:
+        raise HTTPException(400, "该服务无需密钥")
+    try:
+        cfg = replace(old, provider=provider, model=model.strip(), base_url=base_url.strip())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if doc:
+        _document(doc)
+    update_translation(provider, cfg.model, cfg.base_url, key.strip() if key is not None else None)
+    STATE["cfg"] = cfg
+    return info(doc)
 
 
 @app.get("/api/parse-settings")
-def get_parse_settings() -> dict:
-    """论文模式与解析选项。"""
+async def get_parse_settings() -> dict:
     from .settings import PARSE_DEFAULTS, get_parse
-
-    return {
-        "options": get_parse(),
-        "defaults": PARSE_DEFAULTS,
-        "applied_paper_mode": bool(STATE.get("paper")),
-    }
+    return {"options": get_parse(), "defaults": PARSE_DEFAULTS,
+            "applied_paper_mode": bool(STATE.get("doc") and STATE["doc"].get("paper_mode"))}
 
 
 @app.post("/api/parse-settings")
-def set_parse_settings(payload: dict) -> dict:
-    """保存解析选项。影响解析结构的项会触发当前文档重新解析。"""
+async def set_parse_settings(payload: dict, doc: str = "") -> dict:
     from .settings import get_parse, set_parse
-
-    before = get_parse()
-    opt = set_parse(payload or {})
-
-    structural = (
-        "paper_mode", "skip_refs", "skip_tables", "mask_math", "fold_formula",
-    )
-    need_reload = any(before.get(k) != opt.get(k) for k in structural)
-    if need_reload and STATE["pdf"] is not None:
-        _load(STATE["pdf"])
-
-    return {
-        "options": opt,
-        "applied_paper_mode": bool(STATE.get("paper")),
-        "reloaded": need_reload,
-        "info": info(),
-    }
-
-
-@app.get("/api/history")
-def get_history_api() -> list[dict]:
-    """最近打开的文件列表, 附带文件当前是否存在。"""
-    from .settings import get_history
-
-    out = []
-    for item in get_history():
-        p = Path(str(item.get("path", "")))
-        out.append({
-            "path": item.get("path", ""),
-            "name": item.get("name", p.name),
-            "ts": item.get("ts", 0),
-            "exists": p.is_file(),
-        })
-    return out
-
-
-@app.post("/api/history/remove")
-def remove_history_api(payload: dict) -> dict:
-    """从历史中移除一条记录。"""
-    from .settings import get_history, remove_history
-
-    remove_history(str(payload.get("path", "")))
-    return {"ok": True, "remaining": len(get_history())}
+    before, options = get_parse(), set_parse(payload or {})
+    structural = {"paper_mode", "skip_refs", "skip_tables", "mask_math", "fold_formula"}
+    current = _document(doc) if doc else STATE["doc"]
+    reloaded = False
+    if current and any(before.get(k) != options.get(k) for k in structural):
+        data = await _inspect(current["path"], options.get("skip_refs", True))
+        current = _register(current["path"], data, current["name"])
+        reloaded = True
+    return {"options": options, "applied_paper_mode": bool(current and current.get("paper_mode")),
+            "reloaded": reloaded, "info": info(current["id"]) if current else info()}
 
 
 @app.get("/api/page/{num}.png")
-def page_png(num: int, dpi: int = 110) -> Response:
-    doc = STATE["doc"]
-    if doc is None:
-        raise HTTPException(400, "尚未加载 PDF")
-    if not (1 <= num <= doc.page_count):
+async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
+    current = _document(doc)
+    if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
-    # 高分屏下前端会按物理像素请求较高 DPI, 上限放宽到 300
     dpi = max(60, min(dpi, 300))
-    pix = doc[num - 1].get_pixmap(dpi=dpi)
+    try:
+        png = await asyncio.get_running_loop().run_in_executor(
+            _executor(), render_page, str(current["path"]), num, dpi, current["stamp"])
+    except Exception:
+        raise HTTPException(409, "PDF 已变更或无法渲染，请重新打开") from None
     return Response(
-        io.BytesIO(pix.tobytes("png")).getvalue(),
+        png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "private, max-age=3600" if doc else "no-store"},
     )
 
 
 @app.get("/api/text/{num}")
-def page_text(num: int) -> dict:
-    pages = STATE["pages"]
+async def page_text(num: int, doc: str = "") -> dict:
+    pages = _document(doc)["pages"]
     if not (1 <= num <= len(pages)):
         raise HTTPException(404, "页码超出范围")
     return {"page": num, "paras": [p.to_dict() for p in pages[num - 1]]}
@@ -422,72 +418,69 @@ async def translate_stream(
     start: int = 1,
     end: int = 0,
     lang: str = "zh",
+    doc: str = "",
 ) -> StreamingResponse:
     """逐页流式翻译(SSE)。边翻边推, 前端立即可读。"""
-    pages = STATE["pages"]
+    current = _document(doc)
+    pages = current["pages"]
     if not pages:
         raise HTTPException(400, "尚未加载 PDF")
 
     total = len(pages)
-    end = total if end <= 0 else min(end, total)
-    start = max(1, min(start, total))
+    end = total if end == 0 else end
+    if not 1 <= start <= end <= total or lang != "zh":
+        raise HTTPException(400, "页码范围无效，或目标语言不是 zh")
 
-    cfg: TransConfig = STATE["cfg"]
+    cfg: TransConfig = replace(STATE["cfg"])
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
         raise HTTPException(400, str(e))
 
     async def gen():
-        yield _sse("meta", {"start": start, "end": end, "total": total})
-
-        from .paper import unmask_formulas
-
-        queue: dict[int, list[str]] = {}
-        lock = asyncio.Lock()
-        pending = list(range(start, end + 1))
-        batch = max(1, cfg.concurrency // 2)
-
-        for i in range(0, len(pending), batch):
-            nums = pending[i : i + batch]
-
-            async def work(n: int) -> None:
-                # 只把需要翻译的块送出去, 图内标签等按设置跳过
+        tasks = set()
+        failed = 0
+        try:
+            yield _sse("meta", {"start": start, "end": end, "total": total, "doc": current["id"]})
+            async def work(n):
+                from .paper import unmask_formulas
                 blocks = pages[n - 1]
-                idxs = [
-                    j for j, p in enumerate(blocks)
-                    if _translatable(getattr(p, "kind", "body"))
-                ]
-                texts = [blocks[j].text for j in idxs]
-                got = await tr.translate(texts, lang) if texts else []
+                indexes = [i for i, p in enumerate(blocks) if _translatable(getattr(p, "kind", "body"))]
+                values = await tr.translate([blocks[i].text for i in indexes], lang) if indexes else []
+                if len(values) != len(indexes):
+                    raise ValueError("翻译结果段落数不匹配")
                 out = [""] * len(blocks)
-                for j, val in zip(idxs, got):
-                    out[j] = val
-                async with lock:
-                    queue[n] = out
-
-            await asyncio.gather(*(work(n) for n in nums))
-
-            for n in nums:
+                for i, value in zip(indexes, values): out[i] = value
                 items = []
-                for j, p in enumerate(pages[n - 1]):
-                    dst = queue[n][j] if j < len(queue[n]) else ""
-                    fmap = getattr(p, "formulas", None) or {}
-                    if dst and fmap:
-                        dst = unmask_formulas(dst, fmap)
-                    src = p.text
-                    if fmap:
-                        src = unmask_formulas(src, fmap)
-                    items.append({
-                        "idx": p.idx,
-                        "kind": p.kind,
-                        "src": src,
-                        "dst": dst,
-                    })
-                yield _sse("page", {"page": n, "items": items})
-                queue.pop(n, None)
+                for p, value in zip(blocks, out):
+                    formulas = getattr(p, "formulas", None) or {}
+                    src = unmask_formulas(p.text, formulas) if formulas else p.text
+                    dst = unmask_formulas(value, formulas) if value and formulas else value
+                    items.append({"idx": p.idx, "kind": p.kind, "src": src, "dst": dst,
+                                  "status": "failed" if dst.startswith("[翻译失败]") else "success"})
+                return n, items
 
-        yield _sse("done", {"ok": True})
+            pending = iter(range(start, end + 1))
+            for _ in range(min(cfg.concurrency, end - start + 1)):
+                tasks.add(asyncio.create_task(work(next(pending))))
+            while tasks:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    tasks.remove(task)
+                    n, items = task.result()
+                    failed += sum(it["status"] == "failed" for it in items)
+                    yield _sse("page", {"page": n, "items": items, "doc": current["id"]})
+                    following = next(pending, None)
+                    if following is not None:
+                        tasks.add(asyncio.create_task(work(following)))
+            yield _sse("done", {"ok": failed == 0, "failed": failed})
+        except Exception:
+            yield _sse("failure", {"message": "翻译任务中断，请重试；已完成段落保留在缓存中"})
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     return StreamingResponse(
         gen(),
@@ -497,28 +490,17 @@ async def translate_stream(
 
 
 @app.get("/api/raw")
-def raw_pdf() -> FileResponse:
-    if STATE["pdf"] is None:
-        raise HTTPException(400, "尚未加载 PDF")
-    return FileResponse(STATE["pdf"], media_type="application/pdf")
+async def raw_pdf(doc: str = "") -> FileResponse:
+    return FileResponse(_document(doc)["path"], media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/shutdown")
-def shutdown() -> dict:
-    """退出应用。
-
-    先返回响应, 短暂延时后退出进程, 保证前端能收到结果。
-    服务只绑定 127.0.0.1, 仅本机页面可触发。
-    """
-
-    def _bye() -> None:
-        time.sleep(0.6)
-        # 本地单用户工具, 直接退出即可;
-        # 翻译缓存的写入均为即时提交, 不会丢数据
+async def shutdown() -> dict:
+    def stop() -> None:
+        time.sleep(0.5)
         os._exit(0)
-
-    threading.Thread(target=_bye, daemon=True).start()
-    return {"ok": True, "message": "服务即将退出"}
+    threading.Thread(target=stop, daemon=True).start()
+    return {"ok": True}
 
 
 # ---------- 初始化 ----------
@@ -528,10 +510,22 @@ def configure(
     roots: list[Path],
     cfg: TransConfig,
     cache_path: Path,
+    skip_references: bool = True,
 ) -> None:
     """由 CLI / 桌面入口调用, 装配运行时状态。"""
     STATE["cfg"] = cfg
+    if STATE["cache"] is not None:
+        STATE["cache"].close()
     STATE["cache"] = Cache(str(cache_path))
-    STATE["roots"] = list(roots)
+    STATE["roots"] = [r.resolve() for r in roots]
+    STATE.update(pdf=None, doc=None, docs={}, pages=[], sizes=[])
     if pdf is not None:
-        _load(pdf)
+        _load(pdf, skip_references)
+
+
+def _translatable(kind: str) -> bool:
+    from .settings import get_parse
+    options = get_parse()
+    if kind == "figtext": return bool(options.get("translate_figtext"))
+    if kind == "caption": return bool(options.get("translate_caption", True))
+    return kind in {"body", "heading", "list"}

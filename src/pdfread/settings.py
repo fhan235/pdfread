@@ -13,27 +13,39 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import threading
+import tempfile
 from pathlib import Path
 
-from .paths import cache_dir
+from .paths import cache_dir, config_dir
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 
 
 def config_path() -> Path:
-    return cache_dir() / "config.json"
+    return config_dir() / "config.json"
 
 
 def load() -> dict:
     p = config_path()
+    # 首次读取即迁移到持久目录，保留旧文件以便回退。
+    if not p.is_file() and not os.environ.get("PDFREAD_CONFIG_DIR"):
+        p = cache_dir() / "config.json"
     if not p.is_file():
         return {}
     try:
         with p.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        for field in ("keys", "profiles"):
+            if field in data and not isinstance(data[field], dict):
+                data[field] = {}
+        if p != config_path():
+            with _LOCK:
+                if not config_path().exists():
+                    save(data)
+        return data
     except Exception:
         return {}
 
@@ -41,15 +53,15 @@ def load() -> dict:
 def save(data: dict) -> None:
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
     with _LOCK:
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
+        fd, name = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=p.parent)
+        tmp = Path(name)
         try:
-            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-        except OSError:
-            pass
-        tmp.replace(p)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            tmp.replace(p)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def get_key(env_name: str) -> str:
@@ -66,14 +78,15 @@ def set_key(env_name: str, value: str) -> None:
     """写入或清除某个密钥。"""
     if not env_name:
         return
-    data = load()
-    keys = data.setdefault("keys", {})
-    value = (value or "").strip()
-    if value:
-        keys[env_name] = value
-    else:
-        keys.pop(env_name, None)
-    save(data)
+    with _LOCK:
+        data = load()
+        keys = data.setdefault("keys", {})
+        value = (value or "").strip()
+        if value:
+            keys[env_name] = value
+        else:
+            keys.pop(env_name, None)
+        save(data)
 
 
 def configured() -> dict[str, bool]:
@@ -90,76 +103,88 @@ def get_provider() -> str:
 
 
 def set_provider(name: str) -> None:
-    data = load()
-    data["provider"] = name
-    save(data)
+    update_translation(name)
 
 
-# ---------- 解析选项 ----------
+def update_translation(provider: str, model=None, base_url=None, key=None) -> None:
+    from .translate import PROVIDERS
 
-# 论文模式相关默认值
+    with _LOCK:
+        data = load()
+        data["provider"] = provider
+        profile = data.setdefault("profiles", {}).setdefault(provider, {})
+        for name, value in (("model", model), ("base_url", base_url)):
+            if value is not None:
+                profile[name] = value
+        if key is not None:
+            env = PROVIDERS[provider]["key_env"]
+            keys = data.setdefault("keys", {})
+            if key:
+                keys[env] = key
+            else:
+                keys.pop(env, None)
+        save(data)
+
+
+def profile(provider: str) -> dict:
+    value = load().get("profiles", {}).get(provider, {})
+    if not isinstance(value, dict):
+        return {}
+    return {key: val for key, val in value.items() if key in {"model", "base_url"} and isinstance(val, str)}
+
+
+def translation_config(provider=None, model=None, base_url=None, **kwargs):
+    from .translate import TransConfig
+    chosen = provider or os.environ.get("PDFREAD_PROVIDER") or get_provider() or "deepseek"
+    saved = profile(chosen)
+    return TransConfig(provider=chosen,
+                       model=model if model is not None else os.environ.get("PDFREAD_MODEL", saved.get("model", "")),
+                       base_url=base_url if base_url is not None else os.environ.get("PDFREAD_BASE_URL", saved.get("base_url", "")),
+                       **kwargs)
+
+
+# ---------- 论文解析与打开历史 ----------
+
 PARSE_DEFAULTS = {
-    "paper_mode": "auto",     # auto | on | off
-    "translate_figtext": False,   # 图内标签(坐标轴/图例)是否翻译
-    "translate_caption": True,    # 图表标题是否翻译
-    "skip_refs": True,            # 跳过参考文献/致谢/附录
-    "skip_tables": True,          # 跳过纯数据表格行
-    "mask_math": True,            # 行内公式占位后翻译
-    "fold_formula": True,         # 独立公式行并入相邻正文
+    "paper_mode": "auto", "translate_figtext": False,
+    "translate_caption": True, "skip_refs": True,
+    "skip_tables": True, "mask_math": True, "fold_formula": True,
 }
-
-
-def get_parse() -> dict:
-    """读取解析选项(缺失项用默认值补全)。"""
-    saved = load().get("parse", {})
-    out = dict(PARSE_DEFAULTS)
-    if isinstance(saved, dict):
-        for k, v in saved.items():
-            if k in out:
-                out[k] = v
-    return out
-
-
-def set_parse(values: dict) -> dict:
-    """更新解析选项, 返回合并后的完整配置。"""
-    data = load()
-    cur = data.get("parse")
-    cur = dict(cur) if isinstance(cur, dict) else {}
-    for k, v in (values or {}).items():
-        if k in PARSE_DEFAULTS:
-            cur[k] = v
-    data["parse"] = cur
-    save(data)
-    return get_parse()
-
-
-# ---------- 打开历史 ----------
-
 HISTORY_MAX = 20
 
 
+def get_parse() -> dict:
+    saved = load().get("parse", {})
+    return {**PARSE_DEFAULTS, **({k: v for k, v in saved.items() if k in PARSE_DEFAULTS} if isinstance(saved, dict) else {})}
+
+
+def set_parse(values: dict) -> dict:
+    with _LOCK:
+        data = load()
+        current = data.get("parse", {})
+        current = dict(current) if isinstance(current, dict) else {}
+        current.update({k: v for k, v in (values or {}).items() if k in PARSE_DEFAULTS})
+        data["parse"] = current
+        save(data)
+    return get_parse()
+
+
 def get_history() -> list[dict]:
-    h = load().get("history", [])
-    return h if isinstance(h, list) else []
+    value = load().get("history", [])
+    return value if isinstance(value, list) else []
 
 
 def add_history(path: str, name: str = "") -> None:
-    """记录一次成功打开(去重置顶, 最多保留 HISTORY_MAX 条)。"""
-    import time as _time
-
-    path = str(path)
-    items = [x for x in get_history() if x.get("path") != path]
-    items.insert(0, {
-        "path": path,
-        "name": name or os.path.basename(path),
-        "ts": int(_time.time()),
-    })
-    data = load()
-    data["history"] = items[:HISTORY_MAX]
-    save(data)
+    with _LOCK:
+        items = [x for x in get_history() if isinstance(x, dict) and x.get("path") != str(path)]
+        items.insert(0, {"path": str(path), "name": name or os.path.basename(path)})
+        data = load()
+        data["history"] = items[:HISTORY_MAX]
+        save(data)
 
 
 def remove_history(path: str) -> None:
-    data = load()
-    data["history"] = [x for x in get_history() if x.get("path") != str(path)]
-    save(data)
+    with _LOCK:
+        data = load()
+        data["history"] = [x for x in get_history() if not isinstance(x, dict) or x.get("path") != str(path)]
+        save(data)

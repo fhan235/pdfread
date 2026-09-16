@@ -16,23 +16,11 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="${PDFREAD_PYTHON:-python3}"
 
-if [[ $# -lt 1 ]]; then
-  echo "用法: $0 <PDF路径> [其他参数...]"
-  echo "例如: $0 ~/papers/paper.pdf --provider deepseek --port 8011"
-  exit 1
-fi
-
-PDF="$1"; shift
-
-if [[ ! -f "$PDF" ]]; then
-  echo "找不到文件: $PDF" >&2
-  exit 1
-fi
-
 # 若使用 conda 环境, 确保其 lib 优先于系统库(规避 libstdc++ 版本冲突)
 PY_PREFIX="$("$PY" -c 'import sys; print(sys.prefix)')"
 if [[ -d "$PY_PREFIX/lib" ]]; then
   export LD_LIBRARY_PATH="$PY_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 fi
 
-exec "$PY" "$APP_DIR/server.py" --pdf "$PDF" "$@"
+export PYTHONPATH="$APP_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m pdfread "$@"

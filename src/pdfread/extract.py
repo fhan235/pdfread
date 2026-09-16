@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from statistics import median
 from typing import Iterable
 
@@ -52,6 +52,7 @@ class Para:
 _REF_HEAD = re.compile(
     r"^\s*(references?|bibliography|works\s+cited|参考文献)\s*$", re.I
 )
+_AFTER_REFS = re.compile(r"^\s*(appendix|appendices|supplement(?:ary)?|acknowledg(?:e)?ments?|附录|致谢)\b", re.I)
 _PAGE_NOISE = re.compile(r"^\s*[\dixvIXV\-–—.,|]{1,12}\s*$")
 _URL_ONLY = re.compile(r"^\s*(https?://|www\.)\S+\s*$", re.I)
 _CAPTION = re.compile(r"^\s*(figure|fig\.?|table|chart|exhibit)\s*\d", re.I)
@@ -348,7 +349,15 @@ def extract_pages(
     skip_references: bool = True,
 ) -> tuple[list[list[Para]], list[tuple[float, float]]]:
     """解析 PDF, 返回 (每页段落列表, 每页尺寸)。"""
-    doc = pymupdf.open(path)
+    with pymupdf.open(path) as doc:
+        if doc.needs_pass:
+            raise ValueError("PDF 已加密，请先解密后再打开")
+        if not doc.page_count:
+            raise ValueError("PDF 没有页面")
+        return _extract_document(doc, skip_references)
+
+
+def _extract_document(doc, skip_references: bool):
 
     # 统计正文基准字号(按字符数加权)
     size_chars: dict[float, int] = {}
@@ -393,21 +402,24 @@ def extract_pages(
                     and pno >= total_pages * 0.5
                 ):
                     in_refs = True
+                if in_refs and not _REF_HEAD.match(text) and (
+                    kind == "heading" or _AFTER_REFS.match(text)
+                ):
+                    in_refs = False
                 if in_refs:
                     continue
                 paras.append(
                     Para(idx=len(paras), text=text, kind=kind, y=y)
                 )
 
-        # 保持栏序(通栏 -> 左栏 -> 右栏), 不做全局 y 排序:
-        # 双栏页的正确阅读顺序是栏优先, 全局按 y 排序会把两栏重新洗牌,
-        # 导致跨栏续句首尾颠倒。各列内部已按 y 排序。
+        # 保持当前的纵向对照阅读方式：同一高度的左右栏内容相邻出现。
+        # 这适合在 PDF 原版页面旁按视觉位置阅读；之后可考虑做成可选模式。
+        paras.sort(key=lambda p: p.y)
         paras = _heal_fragments(paras)
         for i, p in enumerate(paras):
             p.idx = i
         pages.append(paras)
 
-    doc.close()
     return pages, sizes
 
 

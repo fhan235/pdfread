@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import os
+import multiprocessing
+import errno
 import socket
 import sys
 import threading
@@ -24,7 +26,9 @@ def _free_port(host: str, port: int, tries: int = 30) -> int:
             try:
                 s.bind((host, port + i))
                 return port + i
-            except OSError:
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EPERM}:
+                    raise SystemExit("没有权限监听本机端口，请检查系统或沙箱权限") from None
                 continue
     raise SystemExit(f"{host}:{port} 起连续 {tries} 个端口均被占用")
 
@@ -49,12 +53,13 @@ def build_parser():
     ap.add_argument("--root", action="append", default=[],
                     help="追加允许访问的目录(可多次指定)")
     ap.add_argument("--provider",
-                    default=os.environ.get("PDFREAD_PROVIDER", "deepseek"),
+                    default=None,
                     choices=sorted(PROVIDERS), help="翻译服务")
-    ap.add_argument("--model", default="", help="覆盖默认模型名")
-    ap.add_argument("--base-url", default="", help="覆盖默认 API 地址")
+    ap.add_argument("--model", default=None, help="覆盖默认模型名")
+    ap.add_argument("--base-url", default=None, help="覆盖默认 API 地址")
     ap.add_argument("--concurrency", type=int, default=8, help="并发请求数")
-    ap.add_argument("--host", default="127.0.0.1", help="监听地址")
+    ap.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"], help="仅支持本机监听")
+    ap.add_argument("--include-references", action="store_true", help="保留参考文献，避免自动过滤")
     ap.add_argument("--port", type=int, default=8011, help="监听端口(占用则顺延)")
     ap.add_argument("--cache", default="", help="翻译缓存数据库路径")
     ap.add_argument("--open", action="store_true", help="启动后自动打开浏览器")
@@ -63,17 +68,23 @@ def build_parser():
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    multiprocessing.freeze_support()
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not 1 <= args.concurrency <= 32:
+        parser.error("--concurrency 必须在 1–32 之间")
+    if not 1 <= args.port <= 65506:
+        parser.error("--port 必须在 1–65506 之间（预留端口顺延范围）")
     target = args.pdf or args.pdf_opt
 
     from . import server
 
-    cfg = TransConfig(
-        provider=args.provider,
-        model=args.model,
-        base_url=args.base_url,
-        concurrency=args.concurrency,
-    )
+    from .settings import translation_config
+    try:
+        cfg = translation_config(provider=args.provider, model=args.model,
+                                 base_url=args.base_url, concurrency=args.concurrency)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     roots = [
         Path(r).expanduser().resolve()
@@ -98,14 +109,14 @@ def main(argv: list[str] | None = None) -> None:
     cache = Path(args.cache).expanduser() if args.cache else default_cache_db()
     cache.parent.mkdir(parents=True, exist_ok=True)
 
-    server.configure(pdf, uniq, cfg, cache)
+    server.configure(pdf, uniq, cfg, cache, skip_references=not args.include_references)
 
     port = _free_port(args.host, args.port)
     shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{shown}:{port}"
 
     if pdf is not None:
-        print(f"已加载  {pdf.name}  ({server.STATE['doc'].page_count} 页)")
+        print(f"已加载  {pdf.name}  ({len(server.STATE['doc']['pages'])} 页)")
     else:
         print("未指定 PDF, 请在页面中选择或拖入文件")
     try:

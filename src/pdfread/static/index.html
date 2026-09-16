@@ -295,6 +295,7 @@
 </header>
 
 <div id="bar"><div></div></div>
+<div id="runStatus" role="status" style="padding:0 16px;color:var(--dim)"></div>
 
 <main>
   <div class="pane" id="left"></div>
@@ -457,11 +458,18 @@
 const $ = (s) => document.querySelector(s);
 const left = $("#left"), right = $("#right");
 let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
+let fileSerial = 0, leftObserver = null;
 
 /* ---------------- 初始化 ---------------- */
-async function init() {
-  const r = await fetch("/api/info");
-  INFO = await r.json();
+async function init(data = null) {
+  if (data) INFO = data;
+  else {
+    const saved = sessionStorage.getItem("pdfread.doc") || "";
+    const r = await fetch("/api/info?doc=" + encodeURIComponent(saved));
+    if (!r.ok) { sessionStorage.removeItem("pdfread.doc"); throw new Error("文档已过期，请重新打开"); }
+    INFO = await r.json();
+  }
+  if (INFO.doc) sessionStorage.setItem("pdfread.doc", INFO.doc);
 
   if (!INFO.loaded) {
     $("#docTitle").textContent = "未加载 PDF";
@@ -489,6 +497,8 @@ async function init() {
 
 /* ------------- 左栏：懒加载页面位图 ------------- */
 function buildLeft() {
+  if (leftObserver) leftObserver.disconnect();
+  const documentId = INFO.doc;
   left.innerHTML = "";
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
@@ -519,10 +529,11 @@ function buildLeft() {
       if (img.src && img.dataset.dpi >= targetDpi(img, p) - 30) return;
       const dpi = targetDpi(img, p);
       img.dataset.dpi = dpi;
-      img.src = `/api/page/${p}.png?dpi=${dpi}&v=${INFO.ver || ""}`;
+      img.src = `/api/page/${p}.png?dpi=${dpi}&doc=${documentId}`;
       io.unobserve(img);
     });
   }, { rootMargin: "700px" });
+  leftObserver = io;
   left.querySelectorAll("img").forEach((i) => io.observe(i));
 
   // 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图
@@ -543,11 +554,14 @@ function run() {
   if (!INFO || !INFO.loaded) { openPicker(); return; }
   if (!INFO.ready) { openCfg(); return; }
 
-  const s = Math.max(1, +$("#pStart").value || 1);
-  const e = Math.max(0, +$("#pEnd").value || 0);
+  const s = Number($("#pStart").value), e = Number($("#pEnd").value);
+  const lim = e === 0 ? INFO.pages : e;
+  if (!Number.isInteger(s) || !Number.isInteger(e) || s < 1 || s > lim || lim > INFO.pages) {
+    $("#runStatus").textContent = "请输入有效页码范围";
+    return;
+  }
 
   right.innerHTML = "";
-  const lim = e === 0 ? INFO.pages : Math.min(e, INFO.pages);
   for (let i = s; i <= lim; i++) {
     const d = document.createElement("div");
     d.className = "pg"; d.id = "R" + i;
@@ -561,16 +575,19 @@ function run() {
   $("#btnRun").textContent = "停止";
   let done = 0, total = lim - s + 1;
 
-  es = new EventSource(`/api/translate?start=${s}&end=${e}`);
+  es = new EventSource(`/api/translate?start=${s}&end=${e}&doc=${INFO.doc}`);
+  const stream = es;
 
   es.addEventListener("page", (ev) => {
     const d = JSON.parse(ev.data);
+    if (es !== stream || d.doc !== INFO.doc) return;
     renderPage(d.page, d.items);
     done++;
     $("#bar > div").style.width = (done / total * 100) + "%";
   });
-  es.addEventListener("done", () => { es.close(); finish(); });
-  es.onerror = () => { es.close(); finish(); };
+  es.addEventListener("done", () => { if (es === stream) { stream.close(); finish(); } });
+  es.addEventListener("failure", () => { if (es === stream) { stream.close(); finish(); } });
+  es.onerror = () => { if (es === stream) { stream.close(); finish(); } };
 }
 
 function finish() {
@@ -591,7 +608,7 @@ function renderPage(n, items) {
     return;
   }
   box.innerHTML = head + shown.map((it) => {
-    const bad = it.dst.startsWith("[翻译失败]");
+    const bad = it.status === "failed" || it.dst.startsWith("[翻译失败]");
     const dst = tidy(it.dst);
     return `<div class="para ${it.kind}${bad ? " err" : ""}${showSrc ? " show-src" : ""}">`
       + `<div class="dst">${esc(dst)}</div>`
@@ -730,6 +747,7 @@ $("#pkList").addEventListener("click", (e) => {
 });
 
 async function openFile(path) {
+  const serial = ++fileSerial, previous = right.innerHTML;
   // 切换文件前停掉正在进行的翻译流, 避免旧数据写入新文档
   if (es) { es.close(); es = null; }
   running = false;
@@ -738,12 +756,19 @@ async function openFile(path) {
   try {
     const r = await fetch("/api/open?path=" + encodeURIComponent(path), { method: "POST" });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    await reload();
-  } catch (e) { setBusy("打开失败：" + e, true); }
+    if (serial === fileSerial) await reload(await r.json());
+  } catch (e) {
+    if (serial === fileSerial) {
+      right.innerHTML = previous;
+      $("#runStatus").textContent = "打开失败：" + e;
+    }
+  }
 }
 
 async function uploadFile(file) {
   if (!file || !/\.pdf$/i.test(file.name)) { setBusy("仅支持 PDF 文件", true); return; }
+  if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
+  const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }
   running = false;
   closePicker();
@@ -753,20 +778,25 @@ async function uploadFile(file) {
   try {
     const r = await fetch("/api/upload", { method: "POST", body: fd });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    await reload();
-  } catch (e) { setBusy("上传失败：" + e, true); }
+    if (serial === fileSerial) await reload(await r.json());
+  } catch (e) {
+    if (serial === fileSerial) {
+      right.innerHTML = previous;
+      $("#runStatus").textContent = "上传失败：" + e;
+    }
+  }
 }
 
 function setBusy(msg, err) {
   right.innerHTML = `<div class="empty"${err ? ' style="color:#ff7a7a"' : ""}>${esc(msg)}</div>`;
 }
 
-async function reload() {
+async function reload(data) {
   if (es) { es.close(); es = null; }
   running = false;
   $("#btnRun").textContent = "开始翻译";
   right.innerHTML = `<div class="empty">设置页码范围后点击 <b>开始翻译</b></div>`;
-  await init();
+  await init(data);
 }
 
 $("#btnOpen").onclick = openPicker;
@@ -885,6 +915,9 @@ function doExport() {
   const md = prefs.expFmt === "md";
   let count = 0;
   const out = [];
+  const failed = right.querySelectorAll(".para.err").length;
+  const incomplete = [...right.querySelectorAll(".skeleton")].filter((el) => !el.textContent.includes("无正文")).length;
+  if (failed || incomplete) out.push(`注意：此导出不完整，已跳过 ${failed} 个失败段落，另有 ${incomplete} 页未完成。\n`);
   const title = (INFO?.title || INFO?.name || "pdfread")
     .replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
 
@@ -896,6 +929,7 @@ function doExport() {
     const no = pg.id.slice(1);
     out.push(md ? `\n## 第 ${no} 页\n` : `\n========== 第 ${no} 页 ==========\n`);
     paras.forEach((p) => {
+      if (p.classList.contains("err")) return;
       // textContent 能取到隐藏的原文
       const dst = (p.querySelector(".dst")?.textContent || "").trim();
       if (!dst) return;
@@ -924,7 +958,7 @@ function doExport() {
   a.remove();
   URL.revokeObjectURL(a.href);
 
-  hint.textContent = `已导出 ${count} 段`;
+  hint.textContent = `已导出 ${count} 段` + (failed || incomplete ? "（内容不完整）" : "");
   hint.className = "hint ok";
 }
 
@@ -1155,7 +1189,7 @@ segInit("segLayout", "layout");
 segInit("segExpFmt", "expFmt");
 segInit("segExpSrc", "expSrc");
 
-init();
+init().catch((e) => setBusy(String(e), true));
 </script>
 </body>
 </html>

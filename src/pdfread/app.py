@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import multiprocessing
 import socket
 import sys
 import threading
@@ -160,6 +161,7 @@ def _run_native_window(url: str) -> bool:
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
     _ensure_console_streams()
     try:
         import uvicorn

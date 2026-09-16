@@ -37,7 +37,22 @@ pip install git+https://github.com/fhan235/pdfread.git
 pdfread paper.pdf
 ```
 
-或者克隆后用 `run.sh`（Linux/macOS）、`run.bat`（Windows），脚本会自动准备环境。
+### 从源码运行
+
+```bash
+git clone https://github.com/fhan235/pdfread.git
+cd pdfread
+pip install -e .
+pdfread paper.pdf
+```
+
+也可以使用模块入口：
+
+```bash
+python -m pdfread paper.pdf
+```
+
+Windows、macOS 与 Linux 均可使用以上方式；请使用 Python 3.10 或更高版本。
 
 ## 使用
 
@@ -55,6 +70,15 @@ pdfread paper.pdf --open     # 并自动打开浏览器
 | 点击段落 | 展开/收起对应英文原文 |
 | 顶栏「原文」 | 全局切换原文对照 |
 | 顶栏「同步」 | 开关左右滚动联动 |
+| 打开面板「保留参考文献」 | 关闭自动参考文献过滤，适合识别不准确的文档 |
+| 顶栏「导出」 | 导出当前已完成内容为 TXT / Markdown，可选双语；跳过失败段落并提示未完成内容 |
+
+参考文献过滤会在后续章节或附录标题处恢复正文，仍属于启发式识别。
+命令行可用 `pdfread paper.pdf --include-references` 保留全部内容。
+当前双栏段落的阅读顺序保持不变。
+
+每个浏览器标签的文件请求使用独立文档 ID；进程内保留最近打开的 16 份文档，
+服务重启或文档过期后需要重新打开。原文件发生修改时也需要重新打开。
 
 ## 翻译服务
 
@@ -69,6 +93,14 @@ pdfread paper.pdf --open     # 并自动打开浏览器
 | `ollama` | 无需 | qwen2.5:7b |
 
 任何 OpenAI 兼容接口都可用 `--base-url` + `--model` 接入。
+界面「设置」也可填写模型和 API 地址，按服务分别保存；只更新密钥不会重置这些选项。
+服务、模型和地址的启动优先级为：命令行参数 > 环境变量 > 本地设置 > 默认值。
+对应环境变量为 `PDFREAD_PROVIDER`、`PDFREAD_MODEL`、`PDFREAD_BASE_URL`。
+目前仅支持翻译为简体中文；并发数 `--concurrency` 必须在 1–32 之间。
+
+设置与缓存分开保存，可分别用 `PDFREAD_CONFIG_DIR`、`PDFREAD_CACHE_DIR` 指定目录。
+旧版缓存目录中的配置会在首次读取时复制到新设置目录，旧文件保留以便回退。
+翻译缓存包含服务地址、模型和提示词版本；升级后旧缓存不会误用于新翻译逻辑，可能需要重新翻译。
 
 ## 成本参考
 
@@ -85,7 +117,7 @@ pdfread paper.pdf --open     # 并自动打开浏览器
 ## 特点
 
 - **快**：98 页 PDF 解析 1.2 秒，单页渲染 40ms
-- **流式**：翻译好一页显示一页，第一页秒出，不用等全文跑完
+- **逐页推送**：哪页先完成就先显示，页面仍按原页码排列；不是逐字流式输出，耗时取决于翻译服务
 - **段落重建**：从行级别还原被 PDF 折断的自然段，避免半句送翻译
 - **省钱**：SQLite 缓存按段落去重，重开文档零费用；自动跳过页眉页脚与参考文献
 
@@ -108,6 +140,7 @@ src/pdfread/
 ├── cli.py              命令行入口
 ├── server.py           FastAPI 服务
 ├── extract.py          PDF 文本提取与段落重建
+├── pdfworker.py        专用进程中的 PDF 解析与页面渲染
 ├── translate.py        并发翻译 + SQLite 缓存
 ├── settings.py         本地配置（API Key）
 ├── paths.py            跨平台路径解析
@@ -122,16 +155,32 @@ pyinstaller --noconfirm pdfread.spec
 ```
 
 产物在 `dist/`。注意 PyInstaller **不支持交叉编译**，需在目标系统上构建。
-本仓库的 GitHub Actions 会在推送 `v*` 标签时自动构建三平台产物。
+本仓库的 GitHub Actions 在主分支、PR 和 `v*` 标签触发测试与三平台构建；标签构建通过后发布 Release。
+CI 使用 `uv.lock` 固定依赖，Intel macOS 使用 `macos-15-intel` runner。
+
+## 开发验证
+
+```bash
+pip install -e '.[test]'
+python -m pytest -q
+# 如已安装 Node.js 22+，可运行前端交互逻辑测试：
+node --test tests/test_frontend.cjs
+```
+
+测试使用临时配置、合成 PDF 和模拟翻译响应，不调用付费翻译服务。
+如已安装 uv，可用 `uv sync --locked --extra test --extra build` 复现 CI 依赖。
+`run.sh` 仅启动当前 Python 环境中的应用，不自动安装依赖；可用 `PDFREAD_PYTHON` 指定解释器。
 
 ## 安全
 
-- API Key 优先读环境变量，界面填写的保存在用户配置目录且权限为 `0600`
+- API Key 优先读环境变量，界面填写的保存在独立用户设置目录；POSIX 系统中新建配置文件权限为 `0600`
 - 密钥不会通过接口返回前端，不写入日志
-- 服务默认绑定 `127.0.0.1`
+- 启动入口仅允许本机监听，并检查 Host 与浏览器请求来源；不支持直接暴露为局域网或公网服务
 - 文件访问限定在白名单目录内，防路径穿越
 - 上传限制扩展名与大小（200 MB）
 - 前端输出经 HTML 转义
+- 翻译时，正文和认证密钥会发送给所选翻译服务；使用本机 Ollama 时由本机处理
+- 上传文件使用独立存储路径，同名文件不会互相覆盖；解析失败不会替换已打开的文档
 
 ## 已知限制
 
