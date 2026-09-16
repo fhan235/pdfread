@@ -134,3 +134,20 @@ def test_malformed_result_reports_stream_failure(client, monkeypatch, make_pdf):
     response = client.get("/api/translate", params={"doc": doc["doc"]})
     assert "event: failure" in response.text
     assert "event: done" not in response.text
+
+
+def test_open_url_rejects_internal_target(client):
+    response = client.post("/api/open-url", json={"url": "http://127.0.0.1/x.pdf"})
+    assert response.status_code == 400
+    assert "拦截" in response.text or "仅支持" in response.text
+
+
+def test_open_url_registers_document(client, make_pdf, monkeypatch):
+    import pdfread.urlfetch as urlfetch
+    src = make_pdf("remote.pdf")
+    monkeypatch.setattr(urlfetch, "fetch_document", lambda url, dest, kind: (src, "remote.pdf"))
+    response = client.post("/api/open-url", json={"url": "https://arxiv.org/abs/2501.01423"})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["loaded"] and data["name"] == "remote.pdf"
+    assert client.get("/api/page/1.png", params={"doc": data["doc"]}).status_code == 200

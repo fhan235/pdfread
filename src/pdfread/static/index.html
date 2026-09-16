@@ -208,6 +208,11 @@
                      border-top: 1px solid var(--line); }
   #picker .addroot input { flex: 1; font-size: 12.5px; }
   #picker .addroot button { flex: 0 0 auto; font-size: 12px; padding: 6px 10px; }
+  #picker .urlrow { display: flex; gap: 8px; padding: 10px 16px;
+                    border-bottom: 1px solid var(--line); background: #0e1016; }
+  #picker .urlrow input { flex: 1; font-size: 12.5px; }
+  #picker .urlrow button { flex: 0 0 auto; font-size: 12px; padding: 6px 12px; }
+  body.light #picker .urlrow { background: #f0f1f4; }
 
   /* ---------- 拖放提示 ---------- */
   #drop { display: none; position: fixed; inset: 0; z-index: 60;
@@ -317,6 +322,10 @@
       <span class="spacer"></span>
       <button id="pkUp" class="ghost">上传文件</button>
       <button id="pkClose" class="ghost">关闭</button>
+    </div>
+    <div class="urlrow">
+      <input id="pkUrl" placeholder="粘贴 PDF 或网页链接，如 arxiv.org/abs/2501.01423" />
+      <button id="pkOpenUrl" class="ghost" type="button">打开链接</button>
     </div>
     <div class="histwrap" id="pkHistWrap">
       <div class="seclabel">最近打开</div>
@@ -802,6 +811,29 @@ async function reload(data) {
 $("#btnOpen").onclick = openPicker;
 $("#pkClose").onclick = closePicker;
 $("#pkUp").onclick = () => $("#pkFile").click();
+$("#pkOpenUrl").onclick = openUrl;
+$("#pkUrl").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") openUrl();
+});
+
+async function openUrl() {
+  const inp = $("#pkUrl"), url = inp.value.trim();
+  if (!url) return;
+  if (es) { es.close(); es = null; }
+  running = false;
+  closePicker();
+  setBusy("正在获取链接内容，网页转 PDF 可能需要十几秒 …");
+  try {
+    const r = await fetch("/api/open-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    inp.value = "";
+    await reload();
+  } catch (e) { setBusy("打开失败：" + e, true); }
+}
 $("#pkAddRoot").onclick = addRoot;
 $("#pkRoot").addEventListener("keydown", (e) => {
   if (e.key === "Enter") addRoot();

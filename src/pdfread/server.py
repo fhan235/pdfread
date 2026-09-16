@@ -290,6 +290,41 @@ async def open_pdf(path: str = Query(...), skip_references: bool = True) -> dict
     return info(current["id"])
 
 
+@app.post("/api/open-url")
+async def open_url(payload: dict) -> dict:
+    """从 URL 打开 PDF; 网页链接经系统浏览器 headless 转成 PDF。
+
+    所有 URL 先经 urlfetch 的 SSRF 校验(协议/凭证/内网拦截/重定向复验)。
+    """
+    from .urlfetch import UrlRejected, fetch_document, normalize_url
+
+    raw = payload.get("url", "")
+    kind = str(payload.get("kind", "auto"))
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(400, "链接为空")
+    if kind not in ("auto", "pdf", "html"):
+        raise HTTPException(400, "kind 必须是 auto / pdf / html")
+
+    try:
+        url = normalize_url(raw.strip())
+        # 下载/转换是阻塞型网络 IO, 放线程里, 不占用 PDF 进程池
+        path, name = await asyncio.to_thread(
+            fetch_document, url, uploads_dir(), kind
+        )
+    except UrlRejected as exc:
+        raise HTTPException(400, str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from None
+
+    root = uploads_dir().resolve()
+    if root not in STATE["roots"]:
+        STATE["roots"].append(root)
+
+    data = await _inspect(path, True)
+    current = _register(path, data, name)
+    return info(current["id"])
+
+
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), skip_references: bool = True) -> dict:
     """上传 PDF 并立即打开。存到用户缓存目录, 不污染安装目录。"""
