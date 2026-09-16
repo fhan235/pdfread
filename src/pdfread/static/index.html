@@ -14,7 +14,28 @@
     --accent: #4f8cff;
     --ok: #3ecf8e;
     --warn: #ffb020;
+    --rfs: 15px;      /* 译文字号, 可在设置中调整 */
   }
+  /* ---------- 浅色主题 ---------- */
+  body.light {
+    --bg: #f4f5f7; --panel: #ffffff; --line: #d9dce3;
+    --fg: #23262e; --dim: #6b7280;
+    --accent: #2563eb; --ok: #0e9f6e; --warn: #d97706;
+  }
+  body.light input, body.light select { background: #fff; }
+  body.light #left { background: #e9ebef; }
+  body.light .pg img { box-shadow: 0 1px 5px #00000022; }
+  body.light .para.heading { color: #111; }
+  body.light .para:hover { background: #00000007; }
+  body.light .para.note { background: #00000008; }
+  body.light .para.note:hover { background: #00000011; }
+  body.light .skeleton::after {
+    background: linear-gradient(90deg, #00000008, #00000012, #00000008);
+    background-size: 200% 100%;
+  }
+  body.light #picker, body.light #cfg { background: #00000055; }
+  body.light #picker .path, body.light #cfg .tip { background: #f0f1f4; }
+  body.light kbd { background: #fff; }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; height: 100%;
@@ -66,6 +87,13 @@
   #left  { background: #0d0f14; border-right: 1px solid var(--line); }
   #right { background: var(--bg); }
 
+  /* ---------- 布局模式 ---------- */
+  main.stacked { flex-direction: column; }
+  main.stacked #left { border-right: 0; border-bottom: 1px solid var(--line);
+                       max-height: 50%; }
+  main.tronly #left { display: none; }
+  main.tronly #right .pg { margin: 0 auto; }
+
   .pg { position: relative; padding: 14px 16px; }
   .pg img { width: 100%; display: block; border-radius: 4px;
             background: #fff; min-height: 120px; }
@@ -81,7 +109,7 @@
   #right .pg { padding: 14px 26px 30px; max-width: 860px; }
   .para { margin: 0 0 14px; cursor: default; border-radius: 5px;
           padding: 3px 7px; margin-left: -7px; transition: background .12s;
-          font-size: 15px; line-height: 1.85; letter-spacing: .2px;
+          font-size: var(--rfs); line-height: 1.85; letter-spacing: .2px;
           text-align: justify; }
   .para:hover { background: #ffffff0a; }
   .para.heading { font-size: 1.3em; font-weight: 650; line-height: 1.5;
@@ -158,9 +186,23 @@
               box-shadow: 0 18px 50px #000000a0; }
   #cfg .bar { display: flex; align-items: center; gap: 10px; padding: 13px 16px;
               border-bottom: 1px solid var(--line); }
-  #cfg .body { padding: 16px; }
+  #cfg .body { padding: 16px; max-height: 62vh; overflow-y: auto; }
   #cfg .fld { margin-bottom: 13px; }
   #cfg .fld label { display: block; margin-bottom: 5px; }
+  /* 分区 */
+  #cfg .sec { margin-bottom: 19px; padding-bottom: 15px;
+              border-bottom: 1px dashed var(--line); }
+  #cfg .sec:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+  #cfg .sec > h3 { margin: 0 0 11px; font-size: 12px; font-weight: 600;
+                   color: var(--dim); letter-spacing: 1.5px; }
+  /* 段选择按钮组 */
+  #cfg .seg { display: flex; gap: 6px; }
+  #cfg .seg button { flex: 1; padding: 6px 4px; font-size: 12.5px;
+                     background: transparent; border: 1px solid var(--line);
+                     color: var(--fg); }
+  #cfg .seg button:hover { border-color: var(--accent); filter: none; }
+  #cfg .seg button.on { background: var(--accent);
+                        border-color: var(--accent); color: #fff; }
   #cfg .fld select, #cfg .fld input { width: 100%; }
   #cfg .keywrap { display: flex; gap: 8px; }
   #cfg .keywrap input { flex: 1; }
@@ -191,6 +233,7 @@
          title="0 表示到最后一页" />
 
   <button id="btnRun">开始翻译</button>
+  <button id="btnExp" class="ghost" title="导出当前已翻译内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
   <button id="btnSync" class="ghost">同步: 开</button>
 </header>
@@ -231,32 +274,86 @@
 <div id="cfg">
   <div class="box">
     <div class="bar">
-      <b>翻译设置</b>
+      <b>设置</b>
       <span class="spacer"></span>
       <button id="cfgClose" class="ghost">关闭</button>
     </div>
     <div class="body">
-      <div class="fld">
-        <label>翻译服务</label>
-        <select id="cfgProvider"></select>
-      </div>
-      <div class="fld">
-        <label>API Key</label>
-        <div class="keywrap">
-          <input id="cfgKey" type="password" autocomplete="off"
-                 placeholder="粘贴密钥后点保存" />
-          <button id="cfgEye" type="button" class="ghost" title="显示/隐藏">显示</button>
+      <div class="sec">
+        <h3>翻译</h3>
+        <div class="fld">
+          <label>翻译服务</label>
+          <select id="cfgProvider"></select>
+        </div>
+        <div class="fld">
+          <label>API Key</label>
+          <div class="keywrap">
+            <input id="cfgKey" type="password" autocomplete="off"
+                   placeholder="粘贴密钥后点保存" />
+            <button id="cfgEye" type="button" class="ghost" title="显示/隐藏">显示</button>
+          </div>
+        </div>
+        <div class="hint" id="cfgHint"></div>
+        <div class="acts">
+          <span class="spacer"></span>
+          <button id="cfgSave">保存密钥</button>
         </div>
       </div>
-      <div class="hint" id="cfgHint"></div>
-      <div class="acts">
-        <span class="spacer"></span>
-        <button id="cfgSave">保存</button>
+
+      <div class="sec">
+        <h3>阅读</h3>
+        <div class="fld">
+          <label>主题</label>
+          <div class="seg" id="segTheme">
+            <button data-v="dark">深色</button>
+            <button data-v="light">浅色</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>译文字号</label>
+          <div class="seg" id="segFont">
+            <button data-v="13.5">小</button>
+            <button data-v="15">中</button>
+            <button data-v="17">大</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>布局</label>
+          <div class="seg" id="segLayout">
+            <button data-v="side">左右对照</button>
+            <button data-v="stack">上下对照</button>
+            <button data-v="tronly">仅译文</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>导出</h3>
+        <div class="fld">
+          <label>格式</label>
+          <div class="seg" id="segExpFmt">
+            <button data-v="txt">TXT</button>
+            <button data-v="md">Markdown</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>内容</label>
+          <div class="seg" id="segExpSrc">
+            <button data-v="dst">仅译文</button>
+            <button data-v="bi">双语对照</button>
+          </div>
+        </div>
+        <div class="acts">
+          <span class="spacer"></span>
+          <button id="btnExport">导出当前译文</button>
+        </div>
+        <div class="hint" id="expHint"></div>
       </div>
     </div>
     <div class="tip">
       密钥保存在本机配置文件（权限 0600），不会上传到任何服务器。<br />
-      若已设置对应的环境变量，则环境变量优先生效。
+      若已设置对应的环境变量，则环境变量优先生效。<br />
+      阅读偏好保存在本浏览器，导出的是当前已翻译的内容。
     </div>
   </div>
 </div>
@@ -533,6 +630,102 @@ window.addEventListener("drop", (e) => {
   if (f) uploadFile(f);
 });
 
+/* ---------------- 阅读偏好(存 localStorage) ---------------- */
+const PREF_KEY = "pdfread.prefs";
+let prefs = { theme: "dark", font: "15", layout: "side",
+              expFmt: "txt", expSrc: "dst" };
+
+function loadPrefs() {
+  try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
+  catch (e) { /* 忽略损坏的偏好 */ }
+}
+function savePrefs() {
+  localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+}
+function applyPrefs() {
+  document.body.classList.toggle("light", prefs.theme === "light");
+  document.documentElement.style.setProperty("--rfs", prefs.font + "px");
+  const m = document.querySelector("main");
+  m.classList.toggle("stacked", prefs.layout === "stack");
+  m.classList.toggle("tronly", prefs.layout === "tronly");
+  syncSeg("segTheme", prefs.theme);
+  syncSeg("segFont", prefs.font);
+  syncSeg("segLayout", prefs.layout);
+  syncSeg("segExpFmt", prefs.expFmt);
+  syncSeg("segExpSrc", prefs.expSrc);
+}
+function syncSeg(id, v) {
+  document.querySelectorAll("#" + id + " button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.v === String(v)));
+}
+function segInit(id, key) {
+  document.querySelectorAll("#" + id + " button").forEach((b) => {
+    b.onclick = () => {
+      prefs[key] = b.dataset.v;
+      savePrefs();
+      applyPrefs();
+    };
+  });
+}
+
+/* ---------------- 导出 ---------------- */
+function doExport() {
+  const items = right.querySelectorAll(".pg .para");
+  const hint = $("#expHint");
+  if (!items.length) {
+    hint.textContent = "还没有可导出的译文，请先翻译";
+    hint.className = "hint bad";
+    if (!$("#cfg").classList.contains("on")) openCfg();
+    return;
+  }
+
+  const bi = prefs.expSrc === "bi";
+  const md = prefs.expFmt === "md";
+  let count = 0;
+  const out = [];
+  const title = (INFO?.title || INFO?.name || "pdfread")
+    .replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+
+  if (md) out.push(`# ${INFO?.title || INFO?.name || "译文"}\n`);
+
+  right.querySelectorAll(".pg").forEach((pg) => {
+    const paras = pg.querySelectorAll(".para");
+    if (!paras.length) return;
+    const no = pg.id.slice(1);
+    out.push(md ? `\n## 第 ${no} 页\n` : `\n========== 第 ${no} 页 ==========\n`);
+    paras.forEach((p) => {
+      // textContent 能取到隐藏的原文
+      const dst = (p.querySelector(".dst")?.textContent || "").trim();
+      if (!dst) return;
+      count++;
+      if (bi) {
+        const src = (p.querySelector(".src")?.textContent || "").trim();
+        out.push(md ? `${dst}\n\n> ${src}\n` : `${dst}\n【原】${src}\n`);
+      } else {
+        out.push(dst + "\n");
+      }
+    });
+  });
+
+  if (!count) {
+    hint.textContent = "当前页面没有译文内容";
+    hint.className = "hint bad";
+    return;
+  }
+
+  const blob = new Blob([out.join("\n")], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${title}-译文.${md ? "md" : "txt"}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+
+  hint.textContent = `已导出 ${count} 段`;
+  hint.className = "hint ok";
+}
+
 /* ---------------- 设置 ---------------- */
 let CFG = null;
 
@@ -632,6 +825,17 @@ $("#cfg").addEventListener("click", (e) => {
 $("#cfgKey").addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveCfg();
 });
+$("#btnExport").onclick = doExport;
+$("#btnExp").onclick = doExport;
+
+/* 启动: 先恢复阅读偏好, 再加载 */
+loadPrefs();
+applyPrefs();
+segInit("segTheme", "theme");
+segInit("segFont", "font");
+segInit("segLayout", "layout");
+segInit("segExpFmt", "expFmt");
+segInit("segExpSrc", "expSrc");
 
 init();
 </script>
