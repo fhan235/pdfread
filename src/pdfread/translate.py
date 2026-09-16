@@ -4,19 +4,18 @@
 - 按页打包整页段落一次请求(而不是每段一次), 请求数从 2000+ 降到 ~100。
 - 用编号分隔符让模型逐段返回, 再按编号切回去。
 - SQLite 缓存以 (文本, 模型, 目标语言) 的 hash 为键, 重开文档不重复付费。
-- API Key 仅从环境变量读取, 不落盘、不进日志。
+- API Key 从环境变量或本地设置读取，不写入日志。
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
-import os
 import re
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -84,6 +83,18 @@ class TransConfig:
     max_chars: int = 2600      # 单次请求最大字符数
     timeout: float = 120.0
 
+    def __post_init__(self):
+        if self.provider not in PROVIDERS:
+            raise ValueError("未知翻译服务")
+        if not 1 <= self.concurrency <= 32:
+            raise ValueError("并发数必须在 1–32 之间")
+        if self.max_chars < 100 or self.timeout <= 0:
+            raise ValueError("字符预算至少为 100，超时必须大于 0")
+        if self.base_url:
+            url = urlsplit(self.base_url)
+            if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ValueError("API 地址必须是有效的 HTTP(S) 地址，不能包含密钥、查询参数或片段")
+
     def resolve(self) -> tuple[str, str, str]:
         """返回 (base_url, model, api_key)。
 
@@ -94,7 +105,7 @@ class TransConfig:
         preset = PROVIDERS.get(self.provider)
         if preset is None:
             raise ValueError(f"未知服务: {self.provider}")
-        base_url = self.base_url or preset["base_url"]
+        base_url = (self.base_url or preset["base_url"]).rstrip("/")
         model = self.model or preset["model"]
         key_env = preset["key_env"]
         if not key_env:
@@ -150,14 +161,19 @@ class Cache:
             )
             self._conn.commit()
 
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
 
 # ---------- 翻译器 ----------
 
 class Translator:
     def __init__(self, cfg: TransConfig, cache: Cache):
-        self.cfg = cfg
+        self.cfg = replace(cfg)
         self.cache = cache
         self.base_url, self.model, self._key = cfg.resolve()
+        self.cache_model = "\x00".join((self.base_url, self.model, hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(), "v2"))
         self._sem = asyncio.Semaphore(cfg.concurrency)
 
     def _pack(self, texts: list[str]) -> list[list[int]]:
@@ -203,11 +219,21 @@ class Translator:
                     raise httpx.HTTPError(f"HTTP {r.status_code}")
                 r.raise_for_status()
                 data = r.json()
-                return data["choices"][0]["message"]["content"]
-            except Exception as e:  # 退避重试
+                choice = data["choices"][0]
+                if choice.get("finish_reason") in {"length", "content_filter"}:
+                    raise ValueError("模型输出被截断或过滤，请减少每次翻译内容")
+                content = choice["message"]["content"]
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("翻译服务返回空内容")
+                return content
+            except httpx.HTTPStatusError as e:
+                # 认证与参数错误不能靠重试解决，也不把响应正文/密钥带到界面。
+                raise RuntimeError(f"翻译服务返回 HTTP {e.response.status_code}，请检查密钥、模型和地址") from None
+            except (httpx.HTTPError, ValueError, KeyError, IndexError) as e:
                 last_err = e
-                await asyncio.sleep(1.5 * (attempt + 1))
-        raise RuntimeError(f"翻译请求失败: {last_err}")
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"翻译请求失败（{type(last_err).__name__}），请检查网络或服务状态")
 
     @staticmethod
     def _unpack(reply: str, n: int) -> list[str]:
@@ -219,6 +245,9 @@ class Translator:
             if n == 1:
                 return [tidy(reply)]
             return out
+        ids = [int(m.group(1)) for m in marks]
+        if len(set(ids)) != len(ids) or any(i < 0 or i >= n for i in ids):
+            return out
         for j, m in enumerate(marks):
             i = int(m.group(1))
             end = marks[j + 1].start() if j + 1 < len(marks) else len(reply)
@@ -227,11 +256,31 @@ class Translator:
         return out
 
     async def translate(self, texts: list[str], lang: str = "zh") -> list[str]:
+        if lang != "zh":
+            raise ValueError("当前仅支持翻译为简体中文")
+        chunks, owners = [], []
+        for i, text in enumerate(texts):
+            # 尽量在空白处切分，超长无空白片段也受硬上限约束。
+            while len(text) > self.cfg.max_chars:
+                cut = text.rfind(" ", self.cfg.max_chars // 2, self.cfg.max_chars + 1)
+                cut = cut + 1 if cut >= 0 else self.cfg.max_chars
+                chunks.append(text[:cut])
+                owners.append(i)
+                text = text[cut:]
+            chunks.append(text)
+            owners.append(i)
+        translated = await self._translate_short(chunks, lang)
+        result = [[] for _ in texts]
+        for i, value in zip(owners, translated):
+            result[i].append(value)
+        return [next((v for v in parts if v.startswith("[翻译失败]")), " ".join(parts)) for parts in result]
+
+    async def _translate_short(self, texts: list[str], lang: str) -> list[str]:
         """翻译一组段落, 返回等长译文列表。命中缓存的不发请求。"""
         if not texts:
             return []
 
-        keys = [Cache.key(t, self.model, lang) for t in texts]
+        keys = [Cache.key(t, self.cache_model, lang) for t in texts]
         cached = self.cache.get_many(keys)
         result: list[str] = [cached.get(k, "") for k in keys]
 
@@ -256,9 +305,18 @@ class Translator:
                             result[i] = f"[翻译失败] {e}"
                         return
                 parts = self._unpack(reply, len(real))
+                # 格式不完整时仅重试缺失段落，禁止把原文伪装成译文。
+                for j, i in enumerate(real):
+                    if not parts[j]:
+                        try:
+                            async with self._sem:
+                                retry = await self._call(client, f"<<<0>>>\n{texts[i]}")
+                            parts[j] = self._unpack(retry, 1)[0]
+                        except Exception:
+                            pass
                 fresh: list[tuple[str, str]] = []
                 for j, i in enumerate(real):
-                    val = parts[j] or texts[i]
+                    val = parts[j] or "[翻译失败] 模型返回的段落格式不完整，请重试"
                     result[i] = val
                     if parts[j]:
                         fresh.append((keys[i], val))

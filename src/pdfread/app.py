@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import multiprocessing
 import socket
 import sys
 import threading
@@ -51,11 +52,12 @@ def _alert(title: str, msg: str) -> None:
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
     try:
         from . import server
 
-        provider = os.environ.get("PDFREAD_PROVIDER", "deepseek")
-        cfg = TransConfig(provider=provider)
+        from .settings import translation_config
+        cfg = translation_config()
 
         cache = default_cache_db()
         cache.parent.mkdir(parents=True, exist_ok=True)

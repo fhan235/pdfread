@@ -1,6 +1,6 @@
 [project]
 name = "pdfread"
-version = "0.2.4"
+version = "0.3.0"
 description = "轻量 PDF 双栏对照翻译阅读器: 左栏原文, 右栏流式中文译文"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.0"]
+test = ["pytest>=8.0"]
 
 [project.scripts]
 pdfread = "pdfread.cli:main"

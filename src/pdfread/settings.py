@@ -13,27 +13,39 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import threading
+import tempfile
 from pathlib import Path
 
-from .paths import cache_dir
+from .paths import cache_dir, config_dir
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 
 
 def config_path() -> Path:
-    return cache_dir() / "config.json"
+    return config_dir() / "config.json"
 
 
 def load() -> dict:
     p = config_path()
+    # 首次读取即迁移到持久目录，保留旧文件以便回退。
+    if not p.is_file() and not os.environ.get("PDFREAD_CONFIG_DIR"):
+        p = cache_dir() / "config.json"
     if not p.is_file():
         return {}
     try:
         with p.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        for field in ("keys", "profiles"):
+            if field in data and not isinstance(data[field], dict):
+                data[field] = {}
+        if p != config_path():
+            with _LOCK:
+                if not config_path().exists():
+                    save(data)
+        return data
     except Exception:
         return {}
 
@@ -41,15 +53,15 @@ def load() -> dict:
 def save(data: dict) -> None:
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
     with _LOCK:
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
+        fd, name = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=p.parent)
+        tmp = Path(name)
         try:
-            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-        except OSError:
-            pass
-        tmp.replace(p)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            tmp.replace(p)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def get_key(env_name: str) -> str:
@@ -66,14 +78,15 @@ def set_key(env_name: str, value: str) -> None:
     """写入或清除某个密钥。"""
     if not env_name:
         return
-    data = load()
-    keys = data.setdefault("keys", {})
-    value = (value or "").strip()
-    if value:
-        keys[env_name] = value
-    else:
-        keys.pop(env_name, None)
-    save(data)
+    with _LOCK:
+        data = load()
+        keys = data.setdefault("keys", {})
+        value = (value or "").strip()
+        if value:
+            keys[env_name] = value
+        else:
+            keys.pop(env_name, None)
+        save(data)
 
 
 def configured() -> dict[str, bool]:
@@ -90,6 +103,41 @@ def get_provider() -> str:
 
 
 def set_provider(name: str) -> None:
-    data = load()
-    data["provider"] = name
-    save(data)
+    update_translation(name)
+
+
+def update_translation(provider: str, model=None, base_url=None, key=None) -> None:
+    from .translate import PROVIDERS
+
+    with _LOCK:
+        data = load()
+        data["provider"] = provider
+        profile = data.setdefault("profiles", {}).setdefault(provider, {})
+        for name, value in (("model", model), ("base_url", base_url)):
+            if value is not None:
+                profile[name] = value
+        if key is not None:
+            env = PROVIDERS[provider]["key_env"]
+            keys = data.setdefault("keys", {})
+            if key:
+                keys[env] = key
+            else:
+                keys.pop(env, None)
+        save(data)
+
+
+def profile(provider: str) -> dict:
+    value = load().get("profiles", {}).get(provider, {})
+    if not isinstance(value, dict):
+        return {}
+    return {key: val for key, val in value.items() if key in {"model", "base_url"} and isinstance(val, str)}
+
+
+def translation_config(provider=None, model=None, base_url=None, **kwargs):
+    from .translate import TransConfig
+    chosen = provider or os.environ.get("PDFREAD_PROVIDER") or get_provider() or "deepseek"
+    saved = profile(chosen)
+    return TransConfig(provider=chosen,
+                       model=model if model is not None else os.environ.get("PDFREAD_MODEL", saved.get("model", "")),
+                       base_url=base_url if base_url is not None else os.environ.get("PDFREAD_BASE_URL", saved.get("base_url", "")),
+                       **kwargs)

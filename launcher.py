@@ -5,7 +5,8 @@
 这里以绝对导入方式调用, 保证打包后行为与正常安装一致。
 """
 
-from pdfread.app import main
-
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    from pdfread.app import main
     main()

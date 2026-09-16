@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from statistics import median
 from typing import Iterable
 
@@ -52,6 +52,7 @@ class Para:
 _REF_HEAD = re.compile(
     r"^\s*(references?|bibliography|works\s+cited|参考文献)\s*$", re.I
 )
+_AFTER_REFS = re.compile(r"^\s*(appendix|appendices|supplement(?:ary)?|acknowledg(?:e)?ments?|附录|致谢)\b", re.I)
 _PAGE_NOISE = re.compile(r"^\s*[\dixvIXV\-–—.,|]{1,12}\s*$")
 _URL_ONLY = re.compile(r"^\s*(https?://|www\.)\S+\s*$", re.I)
 _CAPTION = re.compile(r"^\s*(figure|fig\.?|table|chart|exhibit)\s*\d", re.I)
@@ -254,7 +255,15 @@ def extract_pages(
     skip_references: bool = True,
 ) -> tuple[list[list[Para]], list[tuple[float, float]]]:
     """解析 PDF, 返回 (每页段落列表, 每页尺寸)。"""
-    doc = pymupdf.open(path)
+    with pymupdf.open(path) as doc:
+        if doc.needs_pass:
+            raise ValueError("PDF 已加密，请先解密后再打开")
+        if not doc.page_count:
+            raise ValueError("PDF 没有页面")
+        return _extract_document(doc, skip_references)
+
+
+def _extract_document(doc, skip_references: bool):
 
     # 统计正文基准字号(按字符数加权)
     size_chars: dict[float, int] = {}
@@ -299,6 +308,10 @@ def extract_pages(
                     and pno >= total_pages * 0.5
                 ):
                     in_refs = True
+                if in_refs and not _REF_HEAD.match(text) and (
+                    kind == "heading" or _AFTER_REFS.match(text)
+                ):
+                    in_refs = False
                 if in_refs:
                     continue
                 paras.append(
@@ -311,7 +324,6 @@ def extract_pages(
             p.idx = i
         pages.append(paras)
 
-    doc.close()
     return pages, sizes
 
 

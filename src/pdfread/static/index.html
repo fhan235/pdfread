@@ -243,6 +243,7 @@
 </header>
 
 <div id="bar"><div></div></div>
+<div id="runStatus" role="status" style="padding:0 16px;color:var(--dim)"></div>
 
 <main>
   <div class="pane" id="left"></div>
@@ -272,6 +273,7 @@
       <button id="pkAddRoot" class="ghost" type="button">添加目录</button>
     </div>
     <div class="tip">
+      <label><input type="checkbox" id="keepRefs" /> 保留参考文献（避免自动过滤正文）</label><br />
       也可以直接把 PDF 拖到窗口任意位置
       <input type="file" id="pkFile" accept="application/pdf" hidden />
     </div>
@@ -301,10 +303,12 @@
             <button id="cfgEye" type="button" class="ghost" title="显示/隐藏">显示</button>
           </div>
         </div>
+        <div class="fld"><label>模型（选填）</label><input id="cfgModel" placeholder="留空使用默认模型" /></div>
+        <div class="fld"><label>API 地址（选填）</label><input id="cfgBase" placeholder="https://服务地址/v1" /></div>
         <div class="hint" id="cfgHint"></div>
         <div class="acts">
           <span class="spacer"></span>
-          <button id="cfgSave">保存密钥</button>
+          <button id="cfgSave">保存翻译设置</button>
         </div>
       </div>
 
@@ -359,7 +363,8 @@
       </div>
     </div>
     <div class="tip">
-      密钥保存在本机配置文件（权限 0600），不会上传到任何服务器。<br />
+      密钥保存在本机设置中；翻译时，正文和认证密钥会发送给所选翻译服务。<br />
+      本机 Ollama 的处理发生在本机。设置与可清理缓存分开存放。<br />
       若已设置对应的环境变量，则环境变量优先生效。<br />
       阅读偏好保存在本浏览器，导出的是当前已翻译的内容。
     </div>
@@ -370,11 +375,21 @@
 const $ = (s) => document.querySelector(s);
 const left = $("#left"), right = $("#right");
 let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
+let fileSerial = 0, leftObserver = null;
 
 /* ---------------- 初始化 ---------------- */
-async function init() {
-  const r = await fetch("/api/info");
-  INFO = await r.json();
+async function init(data = null) {
+  if (data) INFO = data;
+  else {
+    const saved = sessionStorage.getItem("pdfread.doc") || "";
+    const r = await fetch("/api/info?doc=" + encodeURIComponent(saved));
+    if (!r.ok) {
+      sessionStorage.removeItem("pdfread.doc");
+      throw new Error("文档已过期，请点击「打开」重新选择 PDF");
+    }
+    INFO = await r.json();
+  }
+  if (INFO.doc) sessionStorage.setItem("pdfread.doc", INFO.doc);
 
   if (!INFO.loaded) {
     $("#docTitle").textContent = "未加载 PDF";
@@ -402,6 +417,8 @@ async function init() {
 
 /* ------------- 左栏：懒加载页面位图 ------------- */
 function buildLeft() {
+  if (leftObserver) leftObserver.disconnect();
+  const documentId = INFO.doc;
   left.innerHTML = "";
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
@@ -419,25 +436,31 @@ function buildLeft() {
       if (!e.isIntersecting) return;
       const img = e.target;
       if (!img.src) {
-        img.src = `/api/page/${img.dataset.p}.png?dpi=110&v=${INFO.ver || ""}`;
+        img.src = `/api/page/${img.dataset.p}.png?dpi=110&doc=${documentId}`;
+        img.onerror = () => { img.alt = "页面加载失败，请重新打开文档"; $("#runStatus").textContent = img.alt; };
       }
       io.unobserve(img);
     });
   }, { rootMargin: "700px" });
+  leftObserver = io;
   left.querySelectorAll("img").forEach((i) => io.observe(i));
 }
 
 /* ---------------- 翻译（SSE 流式） ---------------- */
 function run() {
-  if (running) { es && es.close(); finish(); return; }
+  if (running) { es && es.close(); finish("已停止，未完成的页面可再次翻译"); return; }
   if (!INFO || !INFO.loaded) { openPicker(); return; }
   if (!INFO.ready) { openCfg(); return; }
 
-  const s = Math.max(1, +$("#pStart").value || 1);
-  const e = Math.max(0, +$("#pEnd").value || 0);
+  const s = Number($("#pStart").value), e = Number($("#pEnd").value);
+  const lim = e === 0 ? INFO.pages : e;
+  if (!Number.isInteger(s) || !Number.isInteger(e) || s < 1 || s > lim || lim > INFO.pages) {
+    $("#runStatus").textContent = "请输入有效页码范围，结束页 0 表示最后一页";
+    return;
+  }
 
   right.innerHTML = "";
-  const lim = e === 0 ? INFO.pages : Math.min(e, INFO.pages);
+  $("#runStatus").textContent = "正在翻译…";
   for (let i = s; i <= lim; i++) {
     const d = document.createElement("div");
     d.className = "pg"; d.id = "R" + i;
@@ -451,20 +474,38 @@ function run() {
   $("#btnRun").textContent = "停止";
   let done = 0, total = lim - s + 1;
 
-  es = new EventSource(`/api/translate?start=${s}&end=${e}`);
+  es = new EventSource(`/api/translate?start=${s}&end=${e}&doc=${INFO.doc}`);
+  const stream = es;
 
   es.addEventListener("page", (ev) => {
     const d = JSON.parse(ev.data);
+    if (es !== stream || d.doc !== INFO.doc) return;
     renderPage(d.page, d.items);
     done++;
     $("#bar > div").style.width = (done / total * 100) + "%";
   });
-  es.addEventListener("done", () => { es.close(); finish(); });
-  es.onerror = () => { es.close(); finish(); };
+  es.addEventListener("done", (ev) => {
+    if (es !== stream) return;
+    const d = JSON.parse(ev.data);
+    stream.close(); finish(d.ok ? "翻译完成" : `翻译结束，有 ${d.failed} 段失败，可再次翻译重试`);
+  });
+  es.addEventListener("failure", (ev) => {
+    if (es !== stream) return;
+    stream.close(); finish(JSON.parse(ev.data).message);
+  });
+  es.onerror = () => {
+    if (es !== stream) return;
+    stream.close(); finish("翻译连接中断，请检查服务设置或重新打开文档后重试");
+  };
 }
 
-function finish() {
+function finish(message = "") {
   running = false;
+  es = null;
+  if (message) $("#runStatus").textContent = message;
+  right.querySelectorAll(".skeleton").forEach((el) => {
+    if (el.textContent === "翻译中…") el.textContent = "本页未完成，请重试";
+  });
   $("#btnRun").textContent = "开始翻译";
   setTimeout(() => ($("#bar > div").style.width = "0"), 900);
 }
@@ -478,7 +519,7 @@ function renderPage(n, items) {
     return;
   }
   box.innerHTML = head + items.map((it) => {
-    const bad = it.dst.startsWith("[翻译失败]");
+    const bad = it.status === "failed" || it.dst.startsWith("[翻译失败]");
     const dst = tidy(it.dst || it.src);
     return `<div class="para ${it.kind}${bad ? " err" : ""}${showSrc ? " show-src" : ""}">`
       + `<div class="dst">${esc(dst)}</div>`
@@ -578,43 +619,67 @@ $("#pkList").addEventListener("click", (e) => {
 });
 
 async function openFile(path) {
+  if ($("#btnRun").disabled) return;
+  const serial = ++fileSerial;
   // 切换文件前停掉正在进行的翻译流, 避免旧数据写入新文档
   if (es) { es.close(); es = null; }
   running = false;
+  const previousHTML = right.innerHTML;
+  $("#btnRun").disabled = true;
   closePicker();
   setBusy("正在解析 " + path.split(/[/\\]/).pop() + " …");
   try {
-    const r = await fetch("/api/open?path=" + encodeURIComponent(path), { method: "POST" });
+    const r = await fetch("/api/open?path=" + encodeURIComponent(path) + "&skip_references=" + !$("#keepRefs").checked, { method: "POST" });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    await reload();
-  } catch (e) { setBusy("打开失败：" + e, true); }
+    const data = await r.json();
+    if (serial === fileSerial) await reload(data);
+  } catch (e) {
+    if (serial === fileSerial) {
+      right.innerHTML = previousHTML;
+      finish("打开失败：" + e + "；原文档仍可使用");
+    }
+  }
+  finally { if (serial === fileSerial) { $("#btnRun").disabled = false; $("#btnRun").textContent = "开始翻译"; } }
 }
 
 async function uploadFile(file) {
+  if ($("#btnRun").disabled) return;
   if (!file || !/\.pdf$/i.test(file.name)) { setBusy("仅支持 PDF 文件", true); return; }
+  if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
+  const serial = ++fileSerial;
   if (es) { es.close(); es = null; }
   running = false;
+  const previousHTML = right.innerHTML;
+  $("#btnRun").disabled = true;
   closePicker();
   setBusy(`正在上传 ${file.name}（${(file.size / 1048576).toFixed(1)} MB）…`);
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const r = await fetch("/api/upload?skip_references=" + !$("#keepRefs").checked, { method: "POST", body: fd });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    await reload();
-  } catch (e) { setBusy("上传失败：" + e, true); }
+    const data = await r.json();
+    if (serial === fileSerial) await reload(data);
+  } catch (e) {
+    if (serial === fileSerial) {
+      right.innerHTML = previousHTML;
+      finish("上传失败：" + e + "；原文档仍可使用");
+    }
+  }
+  finally { if (serial === fileSerial) { $("#btnRun").disabled = false; $("#btnRun").textContent = "开始翻译"; } }
 }
 
 function setBusy(msg, err) {
   right.innerHTML = `<div class="empty"${err ? ' style="color:#ff7a7a"' : ""}>${esc(msg)}</div>`;
 }
 
-async function reload() {
+async function reload(data) {
   if (es) { es.close(); es = null; }
   running = false;
   $("#btnRun").textContent = "开始翻译";
   right.innerHTML = `<div class="empty">设置页码范围后点击 <b>开始翻译</b></div>`;
-  await init();
+  $("#runStatus").textContent = "";
+  await init(data);
 }
 
 $("#btnOpen").onclick = openPicker;
@@ -645,7 +710,7 @@ async function addRoot() {
     pathEl.textContent = "添加失败：" + e;
   }
 }
-$("#pkFile").onchange = (e) => uploadFile(e.target.files[0]);
+$("#pkFile").onchange = (e) => { uploadFile(e.target.files[0]); e.target.value = ""; };
 $("#picker").addEventListener("click", (e) => {
   if (e.target.id === "picker") closePicker();
 });
@@ -724,6 +789,9 @@ function doExport() {
   const md = prefs.expFmt === "md";
   let count = 0;
   const out = [];
+  const failed = right.querySelectorAll(".para.err").length;
+  const incomplete = [...right.querySelectorAll(".skeleton")].filter(el => !el.textContent.includes("无正文")).length;
+  if (failed || incomplete) out.push(`注意：此导出不完整，已跳过 ${failed} 个失败段落，另有 ${incomplete} 页未完成。\n`);
   const title = (INFO?.title || INFO?.name || "pdfread")
     .replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
 
@@ -735,6 +803,7 @@ function doExport() {
     const no = pg.id.slice(1);
     out.push(md ? `\n## 第 ${no} 页\n` : `\n========== 第 ${no} 页 ==========\n`);
     paras.forEach((p) => {
+      if (p.classList.contains("err")) return;
       // textContent 能取到隐藏的原文
       const dst = (p.querySelector(".dst")?.textContent || "").trim();
       if (!dst) return;
@@ -763,7 +832,7 @@ function doExport() {
   a.remove();
   URL.revokeObjectURL(a.href);
 
-  hint.textContent = `已导出 ${count} 段`;
+  hint.textContent = `已导出 ${count} 段` + (failed || incomplete ? `（不完整：${failed} 段失败，${incomplete} 页未完成）` : "");
   hint.className = "hint ok";
 }
 
@@ -791,6 +860,8 @@ function syncCfgHint() {
   const it = (CFG?.items || []).find((x) => x.provider === $("#cfgProvider").value);
   const h = $("#cfgHint"), inp = $("#cfgKey");
   if (!it) { h.textContent = ""; return; }
+  $("#cfgModel").value = it.custom_model || "";
+  $("#cfgBase").value = it.base_url || "";
   inp.value = "";
   if (!it.needs_key) {
     inp.disabled = true;
@@ -814,19 +885,21 @@ function syncCfgHint() {
 }
 
 async function saveCfg() {
-  const body = { provider: $("#cfgProvider").value };
+  const documentId = INFO?.doc || "";
+  const body = { provider: $("#cfgProvider").value, model: $("#cfgModel").value.trim(), base_url: $("#cfgBase").value.trim() };
   const k = $("#cfgKey").value.trim();
   if (k) body.key = k;
   $("#cfgHint").textContent = "保存中…";
   $("#cfgHint").className = "hint";
   try {
-    const r = await fetch("/api/settings", {
+    const r = await fetch("/api/settings?doc=" + encodeURIComponent(documentId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    INFO = await r.json();
+    const updated = await r.json();
+    if ((INFO?.doc || "") === documentId) INFO = updated;
     $("#cfgKey").value = "";
     CFG = await (await fetch("/api/settings")).json();
     syncCfgHint();
@@ -878,7 +951,7 @@ segInit("segLayout", "layout");
 segInit("segExpFmt", "expFmt");
 segInit("segExpSrc", "expSrc");
 
-init();
+init().catch(e => { setBusy(String(e), true); $("#runStatus").textContent = "请重新打开文档"; });
 </script>
 </body>
 </html>

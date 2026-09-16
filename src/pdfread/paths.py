@@ -59,6 +59,18 @@ def default_cache_db() -> Path:
     return cache_dir() / "translations.db"
 
 
+def config_dir() -> Path:
+    """持久设置与可清理缓存分开存放。"""
+    override = os.environ.get("PDFREAD_CONFIG_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / APP_NAME
+
+
 def uploads_dir() -> Path:
     """界面上传文件的存放目录。"""
     p = cache_dir() / "uploads"
