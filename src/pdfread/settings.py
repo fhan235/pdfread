@@ -93,3 +93,41 @@ def set_provider(name: str) -> None:
     data = load()
     data["provider"] = name
     save(data)
+
+
+# ---------- 解析选项 ----------
+
+# 论文模式相关默认值
+PARSE_DEFAULTS = {
+    "paper_mode": "auto",     # auto | on | off
+    "translate_figtext": False,   # 图内标签(坐标轴/图例)是否翻译
+    "translate_caption": True,    # 图表标题是否翻译
+    "skip_refs": True,            # 跳过参考文献/致谢/附录
+    "skip_tables": True,          # 跳过纯数据表格行
+    "mask_math": True,            # 行内公式占位后翻译
+    "fold_formula": True,         # 独立公式行并入相邻正文
+}
+
+
+def get_parse() -> dict:
+    """读取解析选项(缺失项用默认值补全)。"""
+    saved = load().get("parse", {})
+    out = dict(PARSE_DEFAULTS)
+    if isinstance(saved, dict):
+        for k, v in saved.items():
+            if k in out:
+                out[k] = v
+    return out
+
+
+def set_parse(values: dict) -> dict:
+    """更新解析选项, 返回合并后的完整配置。"""
+    data = load()
+    cur = data.get("parse")
+    cur = dict(cur) if isinstance(cur, dict) else {}
+    for k, v in (values or {}).items():
+        if k in PARSE_DEFAULTS:
+            cur[k] = v
+    data["parse"] = cur
+    save(data)
+    return get_parse()

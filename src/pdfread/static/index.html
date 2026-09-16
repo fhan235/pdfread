@@ -216,6 +216,15 @@
   #cfg .hint.ok { color: var(--ok); }
   #cfg .hint.bad { color: #ff7a7a; }
   #cfg .acts { display: flex; margin-top: 14px; }
+  #cfg .chk { display: flex; align-items: flex-start; gap: 8px;
+              margin: 0 0 9px; font-size: 12.5px; color: var(--fg);
+              cursor: pointer; line-height: 1.5; }
+  #cfg .chk input { width: auto; margin: 2px 0 0; flex: 0 0 auto;
+                    accent-color: var(--accent); cursor: pointer; }
+  #cfg .badge { display: inline-block; margin-left: 6px; padding: 1px 7px;
+                border-radius: 999px; font-size: 11px; font-weight: 500;
+                background: #ffffff14; color: var(--dim); }
+  #cfg .badge.on { background: #3ecf8e26; color: var(--ok); }
   #cfg .tip { padding: 11px 16px; font-size: 12px; color: var(--dim);
               line-height: 1.6; border-top: 1px solid var(--line);
               background: #0e1016; }
@@ -333,6 +342,31 @@
             <button data-v="tronly">仅译文</button>
           </div>
         </div>
+      </div>
+
+      <div class="sec">
+        <h3>论文模式</h3>
+        <div class="fld">
+          <label>启用方式 <span id="pmState" class="badge"></span></label>
+          <div class="seg" id="segPaper">
+            <button data-v="auto">自动识别</button>
+            <button data-v="on">始终启用</button>
+            <button data-v="off">关闭</button>
+          </div>
+        </div>
+        <label class="chk"><input type="checkbox" id="cbFig" />
+          翻译图表内文字（坐标轴、图例、数据标签）</label>
+        <label class="chk"><input type="checkbox" id="cbCap" />
+          翻译图表标题（Figure / Table 说明）</label>
+        <label class="chk"><input type="checkbox" id="cbRefs" />
+          跳过参考文献 / 致谢 / 附录</label>
+        <label class="chk"><input type="checkbox" id="cbTab" />
+          跳过纯数据表格行</label>
+        <label class="chk"><input type="checkbox" id="cbMath" />
+          公式占位后翻译（避免模型改写公式）</label>
+        <label class="chk"><input type="checkbox" id="cbFold" />
+          独立公式行并入正文（复原被公式截断的段落）</label>
+        <div class="hint" id="pmHint"></div>
       </div>
 
       <div class="sec">
@@ -473,13 +507,16 @@ function renderPage(n, items) {
   const box = document.getElementById("R" + n);
   if (!box) return;
   const head = `<span class="pgno">${n} / ${INFO.pages}</span>`;
-  if (!items.length) {
-    box.innerHTML = head + `<div class="skeleton" style="opacity:.4">（本页无正文）</div>`;
+  // 未翻译的块(按设置跳过的图内标签等)不占据译文版面
+  const shown = items.filter((it) => it.dst);
+  if (!shown.length) {
+    box.innerHTML = head
+      + `<div class="skeleton" style="opacity:.4">（本页无正文）</div>`;
     return;
   }
-  box.innerHTML = head + items.map((it) => {
+  box.innerHTML = head + shown.map((it) => {
     const bad = it.dst.startsWith("[翻译失败]");
-    const dst = tidy(it.dst || it.src);
+    const dst = tidy(it.dst);
     return `<div class="para ${it.kind}${bad ? " err" : ""}${showSrc ? " show-src" : ""}">`
       + `<div class="dst">${esc(dst)}</div>`
       + `<div class="src">${esc(it.src)}</div></div>`;
@@ -774,6 +811,7 @@ async function openCfg() {
   $("#cfg").classList.add("on");
   $("#cfgHint").textContent = "加载中…";
   $("#cfgHint").className = "hint";
+  loadParse();
   try {
     CFG = await (await fetch("/api/settings")).json();
   } catch (e) {
@@ -841,9 +879,10 @@ async function saveCfg() {
 }
 
 function refreshMeta() {
+  const tag = INFO.paper_mode ? " · 论文模式" : "";
   $("#docMeta").textContent =
-    `${INFO.pages} 页 · ${(INFO.chars / 10000).toFixed(1)} 万字符 · `
-    + `${INFO.paras} 段 · ${INFO.provider}/${INFO.model}`;
+    `${INFO.pages} 页 · ${(INFO.chars / 10000).toFixed(1)} 万字符待译 · `
+    + `${INFO.paras} 段 · ${INFO.provider}/${INFO.model}${tag}`;
   if (!INFO.ready) {
     $("#docMeta").innerHTML +=
       ` <span style="color:var(--warn)">· ${esc(INFO.warn)}</span>`;
@@ -866,6 +905,86 @@ $("#cfg").addEventListener("click", (e) => {
 $("#cfgKey").addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveCfg();
 });
+/* ---------------- 论文模式设置 ---------------- */
+const PM_BOXES = {
+  cbFig: "translate_figtext",
+  cbCap: "translate_caption",
+  cbRefs: "skip_refs",
+  cbTab: "skip_tables",
+  cbMath: "mask_math",
+  cbFold: "fold_formula",
+};
+let PARSE = null;
+
+async function loadParse() {
+  try {
+    PARSE = await (await fetch("/api/parse-settings")).json();
+  } catch (e) {
+    $("#pmHint").textContent = "读取失败：" + e;
+    $("#pmHint").className = "hint bad";
+    return;
+  }
+  const o = PARSE.options;
+  syncSeg("segPaper", o.paper_mode);
+  for (const [id, key] of Object.entries(PM_BOXES)) $("#" + id).checked = !!o[key];
+  const on = PARSE.applied_paper_mode;
+  const b = $("#pmState");
+  b.textContent = on ? "当前已生效" : "当前未生效";
+  b.className = "badge" + (on ? " on" : "");
+  $("#pmHint").textContent =
+    "论文模式识别图表区域，跳过坐标轴/图例等碎片，"
+    + "并把被插图和公式截断的段落重新缝合。";
+  $("#pmHint").className = "hint";
+}
+
+async function saveParse(patch) {
+  $("#pmHint").textContent = "应用中…";
+  $("#pmHint").className = "hint";
+  try {
+    const r = await fetch("/api/parse-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    PARSE = { options: d.options, applied_paper_mode: d.applied_paper_mode };
+    syncSeg("segPaper", d.options.paper_mode);
+    for (const [id, key] of Object.entries(PM_BOXES)) {
+      $("#" + id).checked = !!d.options[key];
+    }
+    const b = $("#pmState");
+    b.textContent = d.applied_paper_mode ? "当前已生效" : "当前未生效";
+    b.className = "badge" + (d.applied_paper_mode ? " on" : "");
+
+    if (d.info && d.info.loaded) {
+      INFO = d.info;
+      refreshMeta();
+      // 结构变化时清空已有译文, 避免与新解析结果错位
+      if (d.reloaded) {
+        if (es) { es.close(); es = null; }
+        running = false;
+        $("#btnRun").textContent = "开始翻译";
+        right.innerHTML =
+          `<div class="empty">解析已更新，请重新点击 <b>开始翻译</b></div>`;
+        buildLeft();
+      }
+    }
+    $("#pmHint").textContent = d.reloaded ? "已重新解析文档" : "已保存";
+    $("#pmHint").className = "hint ok";
+  } catch (e) {
+    $("#pmHint").textContent = "应用失败：" + e;
+    $("#pmHint").className = "hint bad";
+  }
+}
+
+document.querySelectorAll("#segPaper button").forEach((b) => {
+  b.onclick = () => saveParse({ paper_mode: b.dataset.v });
+});
+for (const [id, key] of Object.entries(PM_BOXES)) {
+  $("#" + id).onchange = (e) => saveParse({ [key]: e.target.checked });
+}
+
 $("#btnExport").onclick = doExport;
 $("#btnExp").onclick = doExport;
 

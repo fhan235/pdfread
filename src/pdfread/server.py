@@ -40,6 +40,8 @@ STATE: dict = {
     "roots": [],
     "cfg": None,
     "cache": None,
+    "paper": False,   # 当前文档是否按论文模式解析
+    "ver": "",
 }
 
 
@@ -75,7 +77,29 @@ def _load(path: Path) -> None:
             STATE["doc"].close()
         except Exception:
             pass
-    pages, sizes = extract_pages(str(path))
+
+    from . import paper as paper_mod
+    from .settings import get_parse
+
+    opt = get_parse()
+    mode = str(opt.get("paper_mode", "auto"))
+    use_paper = (
+        mode == "on"
+        or (mode == "auto" and paper_mod.looks_like_paper(str(path)))
+    )
+
+    if use_paper:
+        pages, sizes = paper_mod.extract_paper(
+            str(path),
+            skip_refs=bool(opt.get("skip_refs", True)),
+            skip_tables=bool(opt.get("skip_tables", True)),
+            mask_math=bool(opt.get("mask_math", True)),
+            fold_formula=bool(opt.get("fold_formula", True)),
+        )
+    else:
+        pages, sizes = extract_pages(str(path))
+
+    STATE["paper"] = use_paper
     STATE["pdf"] = path
     STATE["doc"] = pymupdf.open(str(path))
     STATE["pages"] = pages
@@ -86,6 +110,18 @@ def _load(path: Path) -> None:
         STATE["ver"] = f"{st.st_mtime_ns:x}-{st.st_size:x}"
     except OSError:
         STATE["ver"] = ""
+
+
+def _translatable(kind: str) -> bool:
+    """该类型是否需要送去翻译。"""
+    from .settings import get_parse
+
+    opt = get_parse()
+    if kind == "figtext":
+        return bool(opt.get("translate_figtext", False))
+    if kind == "caption":
+        return bool(opt.get("translate_caption", True))
+    return kind in ("body", "heading", "list")
 
 
 def _sse(event: str, data: dict) -> str:
@@ -124,15 +160,24 @@ def info() -> dict:
         return {"loaded": False, **base}
 
     doc = STATE["doc"]
+    # 只统计会送去翻译的内容, 便于界面显示真实工作量
+    tr_chars = sum(
+        len(p.text) for pg in STATE["pages"] for p in pg
+        if _translatable(getattr(p, "kind", "body"))
+    )
     return {
         "loaded": True,
         "name": STATE["pdf"].name,
         "path": str(STATE["pdf"]),
         "pages": doc.page_count,
-        "chars": sum(len(p.text) for pg in STATE["pages"] for p in pg),
-        "paras": sum(len(pg) for pg in STATE["pages"]),
+        "chars": tr_chars,
+        "paras": sum(
+            1 for pg in STATE["pages"] for p in pg
+            if _translatable(getattr(p, "kind", "body"))
+        ),
         "sizes": STATE["sizes"],
         "ver": STATE.get("ver", ""),
+        "paper_mode": bool(STATE.get("paper")),
         "title": doc.metadata.get("title") or "",
         **base,
     }
@@ -276,6 +321,41 @@ async def set_settings(payload: dict) -> dict:
     return info()
 
 
+@app.get("/api/parse-settings")
+def get_parse_settings() -> dict:
+    """论文模式与解析选项。"""
+    from .settings import PARSE_DEFAULTS, get_parse
+
+    return {
+        "options": get_parse(),
+        "defaults": PARSE_DEFAULTS,
+        "applied_paper_mode": bool(STATE.get("paper")),
+    }
+
+
+@app.post("/api/parse-settings")
+def set_parse_settings(payload: dict) -> dict:
+    """保存解析选项。影响解析结构的项会触发当前文档重新解析。"""
+    from .settings import get_parse, set_parse
+
+    before = get_parse()
+    opt = set_parse(payload or {})
+
+    structural = (
+        "paper_mode", "skip_refs", "skip_tables", "mask_math", "fold_formula",
+    )
+    need_reload = any(before.get(k) != opt.get(k) for k in structural)
+    if need_reload and STATE["pdf"] is not None:
+        _load(STATE["pdf"])
+
+    return {
+        "options": opt,
+        "applied_paper_mode": bool(STATE.get("paper")),
+        "reloaded": need_reload,
+        "info": info(),
+    }
+
+
 @app.get("/api/page/{num}.png")
 def page_png(num: int, dpi: int = 110) -> Response:
     doc = STATE["doc"]
@@ -324,6 +404,8 @@ async def translate_stream(
     async def gen():
         yield _sse("meta", {"start": start, "end": end, "total": total})
 
+        from .paper import unmask_formulas
+
         queue: dict[int, list[str]] = {}
         lock = asyncio.Lock()
         pending = list(range(start, end + 1))
@@ -333,23 +415,38 @@ async def translate_stream(
             nums = pending[i : i + batch]
 
             async def work(n: int) -> None:
-                texts = [p.text for p in pages[n - 1]]
-                out = await tr.translate(texts, lang) if texts else []
+                # 只把需要翻译的块送出去, 图内标签等按设置跳过
+                blocks = pages[n - 1]
+                idxs = [
+                    j for j, p in enumerate(blocks)
+                    if _translatable(getattr(p, "kind", "body"))
+                ]
+                texts = [blocks[j].text for j in idxs]
+                got = await tr.translate(texts, lang) if texts else []
+                out = [""] * len(blocks)
+                for j, val in zip(idxs, got):
+                    out[j] = val
                 async with lock:
                     queue[n] = out
 
             await asyncio.gather(*(work(n) for n in nums))
 
             for n in nums:
-                items = [
-                    {
+                items = []
+                for j, p in enumerate(pages[n - 1]):
+                    dst = queue[n][j] if j < len(queue[n]) else ""
+                    fmap = getattr(p, "formulas", None) or {}
+                    if dst and fmap:
+                        dst = unmask_formulas(dst, fmap)
+                    src = p.text
+                    if fmap:
+                        src = unmask_formulas(src, fmap)
+                    items.append({
                         "idx": p.idx,
                         "kind": p.kind,
-                        "src": p.text,
-                        "dst": queue[n][j] if j < len(queue[n]) else "",
-                    }
-                    for j, p in enumerate(pages[n - 1])
-                ]
+                        "src": src,
+                        "dst": dst,
+                    })
                 yield _sse("page", {"page": n, "items": items})
                 queue.pop(n, None)
 
