@@ -135,6 +135,7 @@ def fetch_document(
     dest_dir: Path,
     kind: str = "auto",
     max_size: int = MAX_DOWNLOAD,
+    progress=None,
 ) -> tuple[Path, str]:
     """把 URL 变成本地 PDF 文件, 返回 (路径, 建议文件名)。
 
@@ -169,20 +170,32 @@ def fetch_document(
                     if not (sniff.lstrip()[:4] == b"%PDF"
                             or "application/pdf" in ctype):
                         raise UrlRejected("目标内容不是 PDF")
+                    total = None
+                    try:
+                        cl = resp.headers.get("content-length", "")
+                        total = int(cl) if cl else None
+                    except ValueError:
+                        total = None
                     with os.fdopen(fd, "wb") as fh:
                         fh.write(sniff)
                         size = len(sniff)
+                        if progress:
+                            progress("download", size, total)
                         for chunk in it:
                             size += len(chunk)
                             if size > max_size:
                                 raise UrlRejected("文件超过 200MB 上限")
                             fh.write(chunk)
+                            if progress:
+                                progress("download", size, total)
             finally:
                 resp.close()
 
         if not is_pdf:
             os.close(fd)
             tmp.unlink(missing_ok=True)
+            if progress:
+                progress("convert", 0, None)
             from .browser import html_to_pdf
 
             html_to_pdf(final_url, tmp)

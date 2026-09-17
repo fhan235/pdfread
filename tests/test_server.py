@@ -145,7 +145,7 @@ def test_open_url_rejects_internal_target(client):
 def test_open_url_registers_document(client, make_pdf, monkeypatch):
     import pdfread.urlfetch as urlfetch
     src = make_pdf("remote.pdf")
-    monkeypatch.setattr(urlfetch, "fetch_document", lambda url, dest, kind: (src, "remote.pdf"))
+    monkeypatch.setattr(urlfetch, "fetch_document", lambda *a, **kw: (src, "remote.pdf"))
     response = client.post("/api/open-url", json={"url": "https://arxiv.org/abs/2501.01423"})
     assert response.status_code == 200, response.text
     data = response.json()

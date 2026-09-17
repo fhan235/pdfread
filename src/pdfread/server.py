@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import multiprocessing
 import tempfile
 import threading
@@ -41,10 +42,36 @@ MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
 _pool = None
 
 
+def _macos_child_hide_dock() -> None:
+    """macOS 上把 spawn 子进程转为无 Dock 图标的后台进程。
+
+    打包后的 .app 经 LaunchServices 启动时, spawn 子进程会在 Dock 里
+    各出现一个图标; TransformProcessType 把它们转回 UIElement(后台)。
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        from ApplicationServices import (
+            GetCurrentProcess,
+            TransformProcessType,
+            kProcessTransformToUIElementApplication,
+        )
+
+        TransformProcessType(
+            GetCurrentProcess(), kProcessTransformToUIElementApplication
+        )
+    except Exception:
+        pass
+
+
 def _executor():
     global _pool
     if _pool is None:
-        _pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+        _pool = ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_macos_child_hide_dock,
+        )
     return _pool
 
 
@@ -304,6 +331,23 @@ async def open_pdf(path: str = Query(...), skip_references: bool = True) -> dict
     return info(current["id"])
 
 
+# 打开任务的进度(下载/转换/解析), 供前端轮询
+PROGRESS: dict[str, dict] = {}
+
+
+def _set_progress(task: str, stage: str, done: int = 0, total: int | None = None) -> None:
+    if not task:
+        return
+    if len(PROGRESS) > 200:
+        PROGRESS.pop(next(iter(PROGRESS)))
+    PROGRESS[task] = {"stage": stage, "done": done, "total": total, "ts": time.time()}
+
+
+@app.get("/api/progress")
+def get_progress(task: str = "") -> dict:
+    return PROGRESS.get(task, {"stage": "unknown"})
+
+
 @app.post("/api/open-url")
 async def open_url(payload: dict) -> dict:
     """从 URL 打开 PDF; 网页链接经系统浏览器 headless 转成 PDF。
@@ -314,6 +358,7 @@ async def open_url(payload: dict) -> dict:
 
     raw = payload.get("url", "")
     kind = str(payload.get("kind", "auto"))
+    task = str(payload.get("task", ""))
     if not isinstance(raw, str) or not raw.strip():
         raise HTTPException(400, "链接为空")
     if kind not in ("auto", "pdf", "html"):
@@ -321,21 +366,32 @@ async def open_url(payload: dict) -> dict:
 
     try:
         url = normalize_url(raw.strip())
+        _set_progress(task, "download", 0, None)
         # 下载/转换是阻塞型网络 IO, 放线程里, 不占用 PDF 进程池
         path, name = await asyncio.to_thread(
-            fetch_document, url, uploads_dir(), kind
+            fetch_document,
+            url,
+            uploads_dir(),
+            kind,
+            200 * 1024 * 1024,
+            (lambda stage, done, total: _set_progress(task, stage, done, total))
+            if task else None,
         )
     except UrlRejected as exc:
+        _set_progress(task, "error")
         raise HTTPException(400, str(exc)) from None
     except RuntimeError as exc:
+        _set_progress(task, "error")
         raise HTTPException(502, str(exc)) from None
 
     root = uploads_dir().resolve()
     if root not in STATE["roots"]:
         STATE["roots"].append(root)
 
+    _set_progress(task, "parse")
     data = await _inspect(path, True)
     current = _register(path, data, name)
+    _set_progress(task, "done")
     return info(current["id"])
 
 
@@ -562,11 +618,22 @@ async def raw_pdf(doc: str = "") -> FileResponse:
 
 @app.post("/api/shutdown")
 async def shutdown() -> dict:
-    def stop() -> None:
-        time.sleep(0.5)
+    """退出应用。
+
+    先返回响应, 再关闭进程池(等 worker 退出, 避免 macOS 上留下
+    带 Dock 图标的孤儿进程), 最后退出。
+    """
+
+    async def stop() -> None:
+        global _pool
+        await asyncio.sleep(0.4)
+        pool, _pool = _pool, None
+        if pool is not None:
+            await asyncio.to_thread(pool.shutdown, True, cancel_futures=True)
         os._exit(0)
-    threading.Thread(target=stop, daemon=True).start()
-    return {"ok": True}
+
+    asyncio.create_task(stop())
+    return {"ok": True, "message": "服务即将退出"}
 
 
 # ---------- 初始化 ----------

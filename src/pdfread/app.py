@@ -150,6 +150,47 @@ def _run_native_window(url: str) -> bool:
         return False
 
 
+def _existing_instance() -> str | None:
+    """检测是否已有实例在运行, 有则返回其 URL。
+
+    通过缓存目录的 runtime.json(端口 + pid)判断, 避免重复双击
+    在 Dock / 任务栏出现多个实例图标。
+    """
+    import json
+    import urllib.request
+
+    rt = default_cache_db().parent / "runtime.json"
+    try:
+        data = json.loads(rt.read_text("utf-8"))
+        pid, port = int(data["pid"]), int(data["port"])
+    except Exception:
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    url = f"http://127.0.0.1:{port}"
+    try:
+        with urllib.request.urlopen(url + "/api/info", timeout=2) as r:
+            if r.status == 200:
+                return url
+    except Exception:
+        pass
+    return None
+
+
+def _write_runtime(port: int) -> None:
+    import json
+
+    rt = default_cache_db().parent / "runtime.json"
+    try:
+        rt.write_text(
+            json.dumps({"pid": os.getpid(), "port": port}), "utf-8"
+        )
+    except OSError:
+        pass
+
+
 def main() -> None:
     multiprocessing.freeze_support()
     _ensure_console_streams()
@@ -157,6 +198,12 @@ def main() -> None:
         import uvicorn
 
         from . import server
+
+        # 单实例: 已有实例在运行则直接激活其窗口, 不再起新进程
+        existing = _existing_instance()
+        if existing is not None:
+            _open_window(existing)
+            return
 
         provider = os.environ.get("PDFREAD_PROVIDER", "deepseek")
         cfg = TransConfig(provider=provider)
@@ -170,6 +217,7 @@ def main() -> None:
         host = "127.0.0.1"
         port = _free_port(host)
         url = f"http://{host}:{port}"
+        _write_runtime(port)
 
         # 服务跑在后台线程, 主线程交给原生窗口(或浏览器回退)
         config = uvicorn.Config(
