@@ -7,6 +7,15 @@
 
 if __name__ == "__main__":
     import multiprocessing
+    import sys
+
+    # macOS: multiprocessing 子进程(worker / resource_tracker)会重新
+    # 执行本入口, 在 freeze_support 接管前先把它们的 Dock 图标隐藏。
+    # freeze_support 对子进程不会返回, 因此这之后的代码只在主进程执行。
+    from pdfread._macos import hide_dock_icon_if_multiprocessing_child
+
+    hide_dock_icon_if_multiprocessing_child(sys.argv)
     multiprocessing.freeze_support()
+
     from pdfread.app import main
     main()

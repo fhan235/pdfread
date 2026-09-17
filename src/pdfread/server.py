@@ -42,35 +42,15 @@ MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
 _pool = None
 
 
-def _macos_child_hide_dock() -> None:
-    """macOS 上把 spawn 子进程转为无 Dock 图标的后台进程。
-
-    打包后的 .app 经 LaunchServices 启动时, spawn 子进程会在 Dock 里
-    各出现一个图标; TransformProcessType 把它们转回 UIElement(后台)。
-    """
-    if sys.platform != "darwin":
-        return
-    try:
-        from ApplicationServices import (
-            GetCurrentProcess,
-            TransformProcessType,
-            kProcessTransformToUIElementApplication,
-        )
-
-        TransformProcessType(
-            GetCurrentProcess(), kProcessTransformToUIElementApplication
-        )
-    except Exception:
-        pass
-
-
 def _executor():
     global _pool
     if _pool is None:
+        from ._macos import hide_dock_icon
+
         _pool = ProcessPoolExecutor(
             max_workers=1,
             mp_context=multiprocessing.get_context("spawn"),
-            initializer=_macos_child_hide_dock,
+            initializer=hide_dock_icon,
         )
     return _pool
 
