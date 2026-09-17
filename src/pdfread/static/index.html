@@ -650,7 +650,11 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 /* ---------------- 滚动同步 ---------------- */
-let lock = 0;
+// 滚动同步防振荡: 记录每栏最近一次被"程序滚动"的时间,
+// 该栏随后的回弹事件在抑制窗口内忽略; 配合滞回阈值,
+// 阻断左右栏因页面高度不同、比例换算舍入造成的来回拉扯(自动漂移)
+const suppress = { left: 0, right: 0 };
+const lastTop = { left: 0, right: 0 };
 function topPage(pane, prefix) {
   const y = pane.scrollTop;
   const kids = pane.children;
@@ -663,14 +667,23 @@ function topPage(pane, prefix) {
   return null;
 }
 function sync(from, to) {
-  if (!syncOn || lock) return;
+  if (!syncOn) return;
+  const fk = from === left ? "left" : "right";
+  const tk = to === left ? "left" : "right";
+  // 源栏刚被程序滚动过(它是上一次同步的目标), 忽略其回弹事件
+  if (performance.now() < suppress[fk]) return;
   const cur = topPage(from);
   if (!cur) return;
   const tgt = to.querySelector("#" + (to === left ? "L" : "R") + cur.n);
   if (!tgt) return;
-  lock = 1;
-  to.scrollTop = tgt.offsetTop + Math.max(0, cur.frac) * tgt.offsetHeight;
-  requestAnimationFrame(() => (lock = 0));
+  const y = tgt.offsetTop + Math.max(0, cur.frac) * tgt.offsetHeight;
+  const pageChanged = cur.n !== lastTop[fk];
+  lastTop[fk] = cur.n;
+  // 页码没变且偏差很小 -> 不动, 这是阻断振荡的关键滞回
+  if (!pageChanged && Math.abs(to.scrollTop - y) < 28) return;
+  if (Math.abs(to.scrollTop - y) < 4) return;
+  suppress[tk] = performance.now() + 250;
+  to.scrollTop = y;
 }
 left.addEventListener("scroll", () => sync(left, right), { passive: true });
 right.addEventListener("scroll", () => sync(right, left), { passive: true });
