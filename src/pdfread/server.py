@@ -113,8 +113,8 @@ def _safe_resolve(raw: str) -> Path:
     p = Path(raw).expanduser().resolve()
     if not _within_roots(p):
         raise HTTPException(403, "该路径不在允许访问的目录内")
-    if not p.is_file() or p.suffix.lower() != ".pdf":
-        raise HTTPException(404, "PDF 文件不存在")
+    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub"):
+        raise HTTPException(404, "PDF / EPUB 文件不存在")
     return p
 
 
@@ -152,9 +152,21 @@ def _register(path: Path, data: dict, name: str | None = None) -> dict:
     return current
 
 
-def _load(path: Path, skip_references: bool = True) -> None:
+def _inspect_fn(path: Path):
+    """按格式选择解析函数(在 PDF 进程池中执行, 崩溃隔离一致)。"""
+    if path.suffix.lower() == ".epub":
+        from .epub import inspect_epub
+        return inspect_epub, True, {}
     from .settings import get_parse
-    data = _executor().submit(inspect_pdf, str(path), skip_references, get_parse()).result()
+    return inspect_pdf, True, get_parse()
+
+
+def _load(path: Path, skip_references: bool = True) -> None:
+    fn, _, opts = _inspect_fn(path)
+    if path.suffix.lower() == ".epub":
+        data = _executor().submit(fn, str(path)).result()
+    else:
+        data = _executor().submit(fn, str(path), skip_references, opts).result()
     _register(path, data)
 
 
@@ -172,12 +184,13 @@ async def _restart_executor() -> None:
 
 
 async def _inspect(path: Path, skip_references: bool) -> dict:
-    from .settings import get_parse
+    fn, _, opts = _inspect_fn(path)
+    args = (str(path),) if path.suffix.lower() == ".epub" else (str(path), skip_references, opts)
     try:
-        return await asyncio.get_running_loop().run_in_executor(_executor(), inspect_pdf, str(path), skip_references, get_parse())
+        return await asyncio.get_running_loop().run_in_executor(_executor(), fn, *args)
     except Exception:
         await _restart_executor()
-        raise HTTPException(400, "PDF 无法解析，请确认文件完整、未加密且包含页面") from None
+        raise HTTPException(400, "文件无法解析，请确认文件完整、未加密且包含内容") from None
 
 
 def _document(doc: str = "") -> dict:
@@ -265,6 +278,7 @@ def info(doc: str = "") -> dict:
         "doc": current["id"],
         "title": current["title"],
         "paper_mode": bool(current.get("paper_mode")),
+        "fmt": current.get("fmt", "pdf"),
         **base,
     }
 
@@ -309,7 +323,7 @@ def browse(dir: str = "") -> dict:
                 continue
             if e.is_dir():
                 dirs.append({"name": e.name, "path": str(e)})
-            elif e.suffix.lower() == ".pdf":
+            elif e.suffix.lower() in (".pdf", ".epub"):
                 try:
                     size = e.stat().st_size
                 except OSError:
@@ -411,13 +425,14 @@ async def open_url(payload: dict) -> dict:
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), skip_references: bool = True) -> dict:
-    """上传 PDF 并立即打开。存到用户缓存目录, 不污染安装目录。"""
+    """上传 PDF/EPUB 并立即打开。存到用户缓存目录, 不污染安装目录。"""
     name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
-    if not name.lower().endswith(".pdf"):
-        raise HTTPException(400, "仅支持 PDF 文件")
+    ext = Path(name).suffix.lower()
+    if ext not in (".pdf", ".epub"):
+        raise HTTPException(400, "仅支持 PDF / EPUB 文件")
 
     dest_dir = uploads_dir()
-    dest = dest_dir / f"{uuid4().hex}.pdf"
+    dest = dest_dir / f"{uuid4().hex}{ext}"
     fd, raw = tempfile.mkstemp(prefix="upload-", suffix=".part", dir=dest_dir)
     temporary = Path(raw)
 
@@ -522,9 +537,41 @@ async def set_parse_settings(payload: dict, doc: str = "") -> dict:
             "reloaded": reloaded, "info": info(current["id"]) if current else info()}
 
 
+@app.get("/api/chapter/{num}")
+async def chapter_html(num: int, doc: str = "") -> HTMLResponse:
+    """EPUB 章节净化 HTML, 供左栏渲染(替代 PDF 页面图片)。"""
+    current = _document(doc)
+    htmls = current.get("html")
+    if htmls is None:
+        raise HTTPException(400, "该文档不是 EPUB")
+    if not (1 <= num <= len(htmls)):
+        raise HTTPException(404, "章节超出范围")
+    return HTMLResponse(htmls[num - 1],
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/epub-res/{num}")
+async def epub_resource(num: int, path: str = Query(...), doc: str = "") -> Response:
+    """EPUB 包内图片资源。路径限定在包内, 防穿越。"""
+    current = _document(doc)
+    if current.get("fmt") != "epub":
+        raise HTTPException(400, "该文档不是 EPUB")
+    if not (1 <= num <= len(current["pages"])):
+        raise HTTPException(404, "章节超出范围")
+    from .epub import read_resource
+    try:
+        data, mime = read_resource(str(current["path"]), path)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return Response(data, media_type=mime,
+                    headers={"Cache-Control": "private, max-age=3600"})
+
+
 @app.get("/api/page/{num}.png")
 async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
     current = _document(doc)
+    if current.get("fmt") == "epub":
+        raise HTTPException(400, "EPUB 无页面图片，请使用章节接口")
     if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
     dpi = max(60, min(dpi, 300))
@@ -627,7 +674,11 @@ async def translate_stream(
 
 @app.get("/api/raw")
 async def raw_pdf(doc: str = "") -> FileResponse:
-    return FileResponse(_document(doc)["path"], media_type="application/pdf", headers={"Cache-Control": "no-store"})
+    current = _document(doc)
+    mime = ("application/epub+zip" if current.get("fmt") == "epub"
+            else "application/pdf")
+    return FileResponse(current["path"], media_type=mime,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/shutdown")

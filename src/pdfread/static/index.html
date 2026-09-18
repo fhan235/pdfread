@@ -145,6 +145,21 @@
   .pg { position: relative; padding: 14px 16px; }
   .pg img { width: 100%; display: block; border-radius: 4px;
             background: #fff; min-height: 120px; }
+  /* EPUB 章节(左栏): 纸面样式 */
+  .echapter { background: #fbf9f4; color: #26221c; border-radius: 4px;
+              padding: 30px 36px; font-family: Georgia, "Songti SC",
+              "SimSun", serif; font-size: 15px; line-height: 1.9;
+              min-height: 120px; }
+  .echapter h1, .echapter h2, .echapter h3 { line-height: 1.4;
+              margin: .8em 0 .5em; }
+  .echapter p { margin: 0 0 .9em; text-align: justify; }
+  .echapter img { max-width: 100%; height: auto; display: block;
+              margin: 12px auto; min-height: 0; background: transparent; }
+  .echapter table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .echapter td, .echapter th { border: 1px solid #ccc; padding: 4px 8px; }
+  .echapter blockquote { margin: 12px 0; padding: 4px 14px; color: #555;
+              border-left: 3px solid #ccc; }
+  .echapter .loading { color: #999; font-size: 13px; }
   .pgno {
     position: sticky; top: 0; z-index: 5;
     display: inline-block; margin-bottom: 8px;
@@ -316,7 +331,7 @@
   <span class="meta" id="docMeta"></span>
   <span class="spacer"></span>
 
-  <button id="btnOpen" class="ghost" title="选择或上传 PDF">打开</button>
+  <button id="btnOpen" class="ghost" title="选择或上传 PDF / EPUB">打开</button>
   <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
   <button id="btnTheme" class="ghost" title="切换深色/浅色主题">深色</button>
   <span class="fontctl" title="译文字号">
@@ -362,7 +377,7 @@
 <div id="picker">
   <div class="box">
     <div class="bar">
-      <b>选择 PDF</b>
+      <b>选择文件</b>
       <span class="spacer"></span>
       <button id="pkUp" class="ghost">上传文件</button>
       <button id="pkClose" class="ghost">关闭</button>
@@ -382,12 +397,12 @@
       <button id="pkAddRoot" class="ghost" type="button">添加目录</button>
     </div>
     <div class="tip">
-      也可以直接把 PDF 拖到窗口任意位置
-      <input type="file" id="pkFile" accept="application/pdf" hidden />
+      也可以直接把 PDF / EPUB 拖到窗口任意位置
+      <input type="file" id="pkFile" accept=".pdf,.epub" hidden />
     </div>
   </div>
 </div>
-<div id="drop">松手即可打开该 PDF</div>
+<div id="drop">松手即可打开该文件</div>
 <div id="bye">
   <div class="t">pdfread 已退出</div>
   <div class="s">本地服务已停止，可以直接关闭此页面</div>
@@ -692,38 +707,55 @@ function targetDpi(img, pageIdx) {
 
 function buildLeft() {
   left.innerHTML = "";
+  const epub = INFO.fmt === "epub";
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
     const d = document.createElement("div");
     d.className = "pg";
     d.id = "L" + i;
-    d.innerHTML =
-      `<span class="pgno">${i} / ${INFO.pages}</span>` +
-      `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`;
+    d.innerHTML = `<span class="pgno">${i} / ${INFO.pages}</span>`
+      + (epub
+        ? `<div class="echapter" data-p="${i}"><span class="loading">章节加载中…</span></div>`
+        : `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`);
     left.appendChild(d);
   }
   attachLeftObserver();
 }
 
-/* 进入视口才真正请求图片，98 页也不卡; 标签恢复后也需要重新接管占位图 */
+/* 进入视口才真正请求内容，98 页也不卡; 标签恢复后也需要重新接管占位图 */
 function attachLeftObserver() {
   if (leftObserver) leftObserver.disconnect();
   if (!INFO || !INFO.doc) return;
   const documentId = INFO.doc;
+  const epub = INFO.fmt === "epub";
   const io = new IntersectionObserver((ents) => {
     ents.forEach((e) => {
       if (!e.isIntersecting) return;
-      const img = e.target;
-      const p = +img.dataset.p;
-      if (img.src && img.dataset.dpi >= targetDpi(img, p) - 30) return;
-      const dpi = targetDpi(img, p);
-      img.dataset.dpi = dpi;
-      img.src = `/api/page/${p}.png?dpi=${dpi}&doc=${documentId}`;
-      io.unobserve(img);
+      const el = e.target;
+      const p = +el.dataset.p;
+      if (epub) {
+        if (el.dataset.done) return;
+        el.dataset.done = "1";
+        io.unobserve(el);
+        fetch(`/api/chapter/${p}?doc=${documentId}`)
+          .then((r) => r.ok ? r.text() : Promise.reject(r.status))
+          .then((html) => {
+            // 图片占位前缀替换为包内资源端点
+            el.innerHTML = html.replaceAll("__EPUB_RES__",
+              `/api/epub-res/${p}?doc=${documentId}&path=`);
+          })
+          .catch(() => { el.innerHTML = `<span class="loading">章节加载失败</span>`; });
+        return;
+      }
+      if (el.src && el.dataset.dpi >= targetDpi(el, p) - 30) return;
+      const dpi = targetDpi(el, p);
+      el.dataset.dpi = dpi;
+      el.src = `/api/page/${p}.png?dpi=${dpi}&doc=${documentId}`;
+      io.unobserve(el);
     });
   }, { rootMargin: "700px" });
   leftObserver = io;
-  left.querySelectorAll("img").forEach((i) => io.observe(i));
+  left.querySelectorAll(epub ? ".echapter" : "img").forEach((i) => io.observe(i));
 }
 
 // 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图(只绑定一次)
@@ -731,10 +763,10 @@ let lastW = 0, rszTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(rszTimer);
   rszTimer = setTimeout(() => {
-    if (!leftObserver) return;
+    if (!leftObserver || !INFO || INFO.fmt === "epub") return;
     if (lastW && Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
     lastW = left.clientWidth;
-    left.querySelectorAll("img").forEach((i) => leftObserver.observe(i));
+    left.querySelectorAll(".pg > img").forEach((i) => leftObserver.observe(i));
   }, 300);
 }, { passive: true });
 
@@ -972,7 +1004,7 @@ async function loadDir(dir) {
     + `<span class="ico">▪</span><span class="nm">${esc(f.name)}</span>`
     + `<span class="sz">${(f.size / 1048576).toFixed(1)} MB</span></div>`);
   if (!rows.length) rows.push(`<div class="row"><span class="nm" style="color:var(--dim)">`
-    + `此目录下没有 PDF，可点「上传文件」或拖入</span></div>`);
+    + `此目录下没有 PDF / EPUB，可点「上传文件」或拖入</span></div>`);
   box.innerHTML = rows.join("");
 }
 
@@ -1004,7 +1036,7 @@ async function openFile(path) {
 }
 
 function uploadFile(file) {
-  if (!file || !/\.pdf$/i.test(file.name)) { setBusy("仅支持 PDF 文件", true); return; }
+  if (!file || !/\.(pdf|epub)$/i.test(file.name)) { setBusy("仅支持 PDF / EPUB 文件", true); return; }
   if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }

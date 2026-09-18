@@ -50,6 +50,8 @@ hiddenimports += collect_submodules("webview")
 for mod in ("clr", "clr_loader", "pythonnet"):
     if importlib.util.find_spec(mod) is not None:
         hiddenimports.append(mod)
+# EPUB 解析(惰性导入, 显式声明确保打入包内)
+hiddenimports += ["bs4", "soupsieve", "pdfread.epub"]
 # macOS: 隐藏子进程 Dock 图标所需的 pyobjc 框架
 if IS_MAC:
     hiddenimports += ["ApplicationServices", "AppKit", "pdfread._macos"]
@@ -124,8 +126,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName": "pdfread",
             "CFBundleDisplayName": "PDF 对照阅读器",
-            "CFBundleShortVersionString": "0.6.0",
-            "CFBundleVersion": "0.6.0",
+            "CFBundleShortVersionString": "0.7.0",
+            "CFBundleVersion": "0.7.0",
             "NSHighResolutionCapable": True,
             # 后台服务型应用, 不在 Dock 常驻图标可改为 True
             "LSBackgroundOnly": False,

@@ -186,3 +186,56 @@ def test_docs_list_close_and_dedupe(client, make_pdf):
     client.post("/api/docs/close", json={"id": second["doc"]})
     assert client.get("/api/info").json()["loaded"] is False
     assert client.post("/api/docs/close", json={"id": "ghost"}).json()["existed"] is False
+
+
+def make_epub_file(path):
+    import zipfile
+    container = ('<?xml version="1.0"?><container version="1.0" '
+                 'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                 '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+                 'media-type="application/oebps-package+xml"/></rootfiles></container>')
+    opf = ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
+           'version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+           '<dc:title>Test Book</dc:title></metadata><manifest>'
+           '<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+           '<item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/>'
+           '</manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>')
+    ch1 = ('<html><body><h1>Chapter One</h1><p>First paragraph of the book.</p>'
+           '<p>Second paragraph with <b>bold text</b>.</p><script>alert(1)</script>'
+           '<p><img src="pic.png"/></p></body></html>')
+    ch2 = ('<html><body><h2>Chapter Two</h2><ul><li>Item one here</li>'
+           '<li>Item two here</li></ul></body></html>')
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("META-INF/container.xml", container)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/ch1.xhtml", ch1)
+        z.writestr("OEBPS/ch2.xhtml", ch2)
+        z.writestr("OEBPS/pic.png", b"\x89PNG\r\n\x1a\nfake")
+    return path
+
+
+def test_epub_open_translate_and_chapter(client, tmp_path, make_pdf):
+    doc = opened(client, make_epub_file(tmp_path / "book.epub"))
+    assert doc["fmt"] == "epub"
+    assert doc["title"] == "Test Book"
+    assert doc["pages"] == 2
+
+    text = client.get("/api/text/1", params={"doc": doc["doc"]}).json()
+    kinds = [p["kind"] for p in text["paras"]]
+    assert kinds[0] == "heading" and "Chapter One" in text["paras"][0]["text"]
+    assert "bold text" in text["paras"][2]["text"]
+
+    html = client.get("/api/chapter/1", params={"doc": doc["doc"]}).text
+    assert "Chapter One" in html and "First paragraph" in html
+    assert "<script>" not in html and "alert" not in html
+    assert "__EPUB_RES__OEBPS/pic.png" in html
+
+    res = client.get("/api/epub-res/1", params={"doc": doc["doc"], "path": "OEBPS/pic.png"})
+    assert res.status_code == 200 and res.headers["content-type"] == "image/png"
+    assert client.get("/api/epub-res/1", params={"doc": doc["doc"], "path": "../content.opf"}).status_code == 404
+    assert client.get("/api/page/1.png", params={"doc": doc["doc"]}).status_code == 400
+
+    # EPUB 与 PDF 标签共存互不影响
+    pdf = opened(client, make_pdf())
+    assert client.get("/api/chapter/1", params={"doc": pdf["doc"]}).status_code == 400
+    assert client.get("/api/page/1.png", params={"doc": pdf["doc"]}).status_code == 200
