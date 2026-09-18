@@ -96,6 +96,32 @@
   input:focus, select:focus { outline: 1px solid var(--accent); }
   label { color: var(--dim); font-size: 12px; }
 
+  /* ---------- 标签栏(多文档) ---------- */
+  #tabbar { display: none; align-items: flex-end; gap: 2px;
+            padding: 5px 8px 0; background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; }
+  #tabbar.on { display: flex; }
+  .tab { display: flex; align-items: center; gap: 6px;
+         padding: 5px 10px 6px; font-size: 12.5px; color: var(--dim);
+         border: 1px solid transparent; border-bottom: 0;
+         border-radius: 7px 7px 0 0; cursor: pointer;
+         max-width: 210px; white-space: nowrap; user-select: none;
+         flex: 0 0 auto; }
+  .tab .nm { overflow: hidden; text-overflow: ellipsis; }
+  .tab:hover { background: #ffffff0a; }
+  .tab.on { background: var(--bg); color: var(--fg);
+            border-color: var(--line); position: relative; top: 1px; }
+  .tab .x { border: 0; background: transparent; color: var(--dim);
+            font-size: 14px; padding: 0 3px; cursor: pointer;
+            border-radius: 4px; line-height: 1.3; }
+  .tab .x:hover { color: #ff7a7a; background: #ffffff14; }
+  .tab .dot { color: var(--ok); font-size: 9px; }
+  #tabAdd { flex: 0 0 auto; padding: 2px 10px; font-size: 14px;
+            margin: 0 0 4px 2px; }
+  body.light .tab:hover { background: #00000008; }
+  body.light .tab .x:hover { background: #00000010; }
+
   /* ---------- 进度条 ---------- */
   #bar { height: 2px; background: var(--line); flex: 0 0 auto; }
   #bar > div { height: 100%; width: 0; background: var(--ok);
@@ -302,16 +328,20 @@
   <label>页</label>
   <input id="pStart" type="number" min="1" value="1" style="width:62px" />
   <span style="color:var(--dim)">–</span>
-  <input id="pEnd" type="number" min="0" value="5" style="width:62px"
-         title="0 表示到最后一页" />
+  <input id="pEnd" type="number" min="0" value="0" style="width:62px"
+         title="0 表示到最后一页(默认全文)" />
 
   <button id="btnRun">开始翻译</button>
+  <label>跳到</label>
+  <input id="jumpTo" type="number" min="1" placeholder="页码"
+         style="width:62px" title="输入页码后回车, 左右栏同时跳转" />
   <button id="btnExp" class="ghost" title="导出当前已翻译内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
   <button id="btnSync" class="ghost">同步: 开</button>
   <button id="btnQuit" class="ghost quit" title="退出应用">退出</button>
 </header>
 
+<div id="tabbar"></div>
 <div id="bar"><div></div></div>
 <div id="runStatus" role="status" style="padding:0 16px;color:var(--dim)"></div>
 
@@ -319,10 +349,11 @@
   <div class="pane" id="left"></div>
   <div class="pane" id="right">
     <div class="empty">
-      设置页码范围后点击 <b>开始翻译</b><br /><br />
+      点击 <b>开始翻译</b> 默认翻译全文，可在顶栏调整页码范围<br /><br />
       <span style="font-size:12px">
         译文会逐页流式出现，第一页几秒内即可阅读<br />
-        点击任意段落可展开对应原文 · <kbd>同步</kbd> 控制左右滚动联动
+        点击任意段落可展开对应原文 · <kbd>同步</kbd> 控制左右滚动联动<br />
+        顶栏「跳到」输入页码可一键跳转
       </span>
     </div>
   </div>
@@ -482,45 +513,184 @@ const left = $("#left"), right = $("#right");
 let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
 let fileSerial = 0, leftObserver = null;
 
-/* ---------------- 初始化 ---------------- */
-async function init(data = null) {
-  if (data) INFO = data;
-  else {
-    const saved = sessionStorage.getItem("pdfread.doc") || "";
-    const r = await fetch("/api/info?doc=" + encodeURIComponent(saved));
-    if (!r.ok) { sessionStorage.removeItem("pdfread.doc"); throw new Error("文档已过期，请重新打开"); }
-    INFO = await r.json();
-  }
-  if (INFO.doc) sessionStorage.setItem("pdfread.doc", INFO.doc);
+/* ---------------- 多文档标签 ---------------- */
+/* 每个标签保存一份面板快照(HTML+滚动位置+页码范围),
+   切换时恢复; 未激活标签的翻译流会停掉, 已翻段落留在服务端缓存,
+   回来后重新翻译可秒出已缓存部分 */
+let tabs = [];      // {id, info, leftHTML, rightHTML, leftTop, rightTop, pStart, pEnd, running}
+let activeTab = null;
 
-  if (!INFO.loaded) {
-    $("#docTitle").textContent = "未加载 PDF";
-    $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
-    left.innerHTML = "";
-    openPicker();
-    return;
-  }
+const curTab = () => tabs.find((t) => t.id === activeTab);
+const tabName = (t) => (t.info && (t.info.title || t.info.name)) || "未命名";
+
+function renderTabs() {
+  const bar = $("#tabbar");
+  bar.classList.toggle("on", tabs.length > 0);
+  bar.innerHTML = tabs.map((t) =>
+    `<div class="tab${t.id === activeTab ? " on" : ""}" data-tab="${t.id}"`
+    + ` title="${esc(tabName(t))}">`
+    + (t.running ? `<span class="dot">●</span>` : "")
+    + `<span class="nm">${esc(tabName(t))}</span>`
+    + `<button class="x" data-x="${t.id}" title="关闭该文档">×</button></div>`
+  ).join("") + `<button id="tabAdd" class="ghost" title="打开新文件">＋</button>`;
+  $("#tabAdd").onclick = openPicker;
+}
+
+$("#tabbar").addEventListener("click", (e) => {
+  const x = e.target.closest(".x");
+  if (x) { e.stopPropagation(); closeTab(x.dataset.x); return; }
+  const tab = e.target.closest(".tab");
+  if (tab) switchTab(tab.dataset.tab);
+});
+
+function snapshotTab() {
+  const t = curTab();
+  if (!t) return;
+  Object.assign(t, {
+    info: INFO,
+    leftHTML: left.innerHTML, rightHTML: right.innerHTML,
+    leftTop: left.scrollTop, rightTop: right.scrollTop,
+    pStart: $("#pStart").value, pEnd: $("#pEnd").value,
+  });
+}
+
+function restoreTab(t) {
+  INFO = t.info;
+  activeTab = t.id;
+  sessionStorage.setItem("pdfread.doc", t.id);
   $("#docTitle").textContent = INFO.title || INFO.name;
   refreshMeta();
   $("#btnRun").title = INFO.ready ? "" : INFO.warn;
-  if (!INFO.ready) {
-    right.innerHTML = `<div class="empty">尚未配置翻译服务密钥<br /><br />`
-      + `<span style="font-size:12px">正在打开设置面板…</span></div>`;
-    // 首次打开自动弹出设置, 会话内只弹一次, 避免反复打扰
-    if (!sessionStorage.getItem("cfgPrompted")) {
-      sessionStorage.setItem("cfgPrompted", "1");
-      setTimeout(openCfg, 350);
+  if (t.leftHTML == null) {
+    // 新标签: 首次构建
+    buildLeft();
+    if (!INFO.ready) {
+      right.innerHTML = `<div class="empty">尚未配置翻译服务密钥<br /><br />`
+        + `<span style="font-size:12px">正在打开设置面板…</span></div>`;
+      // 首次打开自动弹出设置, 会话内只弹一次, 避免反复打扰
+      if (!sessionStorage.getItem("cfgPrompted")) {
+        sessionStorage.setItem("cfgPrompted", "1");
+        setTimeout(openCfg, 350);
+      }
+    } else {
+      right.innerHTML = `<div class="empty">点击 <b>开始翻译</b> 默认翻译全文`
+        + `<br /><br /><span style="font-size:12px">顶栏「跳到」输入页码可一键跳转</span></div>`;
+    }
+  } else {
+    left.innerHTML = t.leftHTML;
+    right.innerHTML = t.rightHTML;
+    left.scrollTop = t.leftTop || 0;
+    right.scrollTop = t.rightTop || 0;
+    attachLeftObserver();  // 恢复后重新接管未加载的占位图
+  }
+  $("#pStart").value = t.pStart ?? 1;
+  $("#pEnd").value = t.pEnd ?? 0;
+  suppress.left = suppress.right = 0;
+  lastTop.left = lastTop.right = 0;
+}
+
+function switchTab(id) {
+  if (id === activeTab || !tabs.some((t) => t.id === id)) return;
+  const wasRunning = running;
+  if (es) { es.close(); es = null; }
+  running = false;
+  const old = curTab();
+  if (old) old.running = false;
+  $("#btnRun").textContent = "开始翻译";
+  snapshotTab();
+  restoreTab(tabs.find((t) => t.id === id));
+  $("#runStatus").textContent = wasRunning
+    ? "已切换文档，翻译已停止（已翻部分在缓存中，重新翻译可秒出）" : "";
+  renderTabs();
+}
+
+async function closeTab(id) {
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  if (id === activeTab && es) { es.close(); es = null; }
+  fetch("/api/docs/close", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  }).catch(() => {});
+  tabs.splice(idx, 1);
+  if (activeTab === id) {
+    activeTab = null;
+    running = false;
+    $("#btnRun").textContent = "开始翻译";
+    if (tabs.length) {
+      restoreTab(tabs[Math.min(idx, tabs.length - 1)]);
+    } else {
+      INFO = null;
+      sessionStorage.removeItem("pdfread.doc");
+      $("#docTitle").textContent = "未加载 PDF";
+      $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
+      left.innerHTML = "";
+      right.innerHTML = `<div class="empty">点击「打开」选择文件，或直接拖入 PDF</div>`;
     }
   }
-  $("#pStart").value = 1;
-  $("#pEnd").value = Math.min(5, INFO.pages);
-  buildLeft();
+  renderTabs();
+}
+
+/* 打开成功后的统一入口: 已有同 id 标签则重建, 否则新建标签 */
+function addOrActivateTab(data) {
+  if (es) { es.close(); es = null; }
+  running = false;
+  $("#btnRun").textContent = "开始翻译";
+  let t = tabs.find((x) => x.id === data.doc);
+  if (t) {
+    Object.assign(t, { info: data, leftHTML: null, rightHTML: null,
+                       pStart: 1, pEnd: 0, running: false });
+  } else {
+    t = { id: data.doc, info: data, leftHTML: null, rightHTML: null,
+          pStart: 1, pEnd: 0, running: false };
+    tabs.push(t);
+  }
+  restoreTab(t);
+  renderTabs();
+}
+
+/* ---------------- 初始化 ---------------- */
+async function init(data = null) {
+  if (data) { addOrActivateTab(data); return; }
+  // 启动/刷新: 恢复服务端仍打开的全部文档
+  let list = { docs: [] };
+  try { list = await (await fetch("/api/docs")).json(); } catch (e) {}
+  const saved = sessionStorage.getItem("pdfread.doc") || "";
+  tabs = [];
+  for (const d of list.docs) {
+    try {
+      const r = await fetch("/api/info?doc=" + encodeURIComponent(d.id));
+      if (!r.ok) continue;  // 已过期(如被并发关闭)则跳过
+      const infoData = await r.json();
+      tabs.push({ id: d.id, info: infoData, leftHTML: null, rightHTML: null,
+                  pStart: 1, pEnd: 0, running: false });
+    } catch (e) { /* 单个恢复失败不影响其余 */ }
+  }
+  if (!tabs.length) {
+    activeTab = null;
+    $("#docTitle").textContent = "未加载 PDF";
+    $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
+    left.innerHTML = "";
+    renderTabs();
+    openPicker();
+    return;
+  }
+  restoreTab(tabs.find((t) => t.id === saved) || tabs[tabs.length - 1]);
+  renderTabs();
 }
 
 /* ------------- 左栏：懒加载页面位图 ------------- */
+// 按实际显示宽度与设备像素比计算所需 DPI, 高分屏不再模糊
+function targetDpi(img, pageIdx) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = img.clientWidth || left.clientWidth || 600;
+  const [pw] = INFO.sizes[pageIdx - 1] || [612];
+  // 物理像素宽 / PDF 逻辑宽(1/72 英寸) = 所需 DPI
+  const dpi = Math.round((cssW * dpr * 72) / pw);
+  return Math.min(300, Math.max(120, dpi));
+}
+
 function buildLeft() {
-  if (leftObserver) leftObserver.disconnect();
-  const documentId = INFO.doc;
   left.innerHTML = "";
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
@@ -532,17 +702,14 @@ function buildLeft() {
       `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`;
     left.appendChild(d);
   }
-  // 按实际显示宽度与设备像素比计算所需 DPI, 高分屏不再模糊
-  function targetDpi(img, pageIdx) {
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = img.clientWidth || left.clientWidth || 600;
-    const [pw] = INFO.sizes[pageIdx - 1] || [612];
-    // 物理像素宽 / PDF 逻辑宽(1/72 英寸) = 所需 DPI
-    const dpi = Math.round((cssW * dpr * 72) / pw);
-    return Math.min(300, Math.max(120, dpi));
-  }
+  attachLeftObserver();
+}
 
-  // 进入视口才真正请求图片，98 页也不卡
+/* 进入视口才真正请求图片，98 页也不卡; 标签恢复后也需要重新接管占位图 */
+function attachLeftObserver() {
+  if (leftObserver) leftObserver.disconnect();
+  if (!INFO || !INFO.doc) return;
+  const documentId = INFO.doc;
   const io = new IntersectionObserver((ents) => {
     ents.forEach((e) => {
       if (!e.isIntersecting) return;
@@ -557,18 +724,19 @@ function buildLeft() {
   }, { rootMargin: "700px" });
   leftObserver = io;
   left.querySelectorAll("img").forEach((i) => io.observe(i));
-
-  // 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图
-  let lastW = left.clientWidth, rszTimer = null;
-  window.addEventListener("resize", () => {
-    clearTimeout(rszTimer);
-    rszTimer = setTimeout(() => {
-      if (Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
-      lastW = left.clientWidth;
-      left.querySelectorAll("img").forEach((i) => io.observe(i));
-    }, 300);
-  }, { passive: true });
 }
+
+// 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图(只绑定一次)
+let lastW = 0, rszTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(rszTimer);
+  rszTimer = setTimeout(() => {
+    if (!leftObserver) return;
+    if (lastW && Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
+    lastW = left.clientWidth;
+    left.querySelectorAll("img").forEach((i) => leftObserver.observe(i));
+  }, 300);
+}, { passive: true });
 
 /* ---------------- 翻译（SSE 流式） ---------------- */
 function run() {
@@ -594,6 +762,8 @@ function run() {
   }
 
   running = true;
+  const tab = curTab();
+  if (tab) { tab.running = true; renderTabs(); }
   $("#btnRun").textContent = "停止";
   let done = 0, total = lim - s + 1;
 
@@ -614,8 +784,36 @@ function run() {
 
 function finish() {
   running = false;
+  const tab = curTab();
+  if (tab) { tab.running = false; renderTabs(); }
   $("#btnRun").textContent = "开始翻译";
   setTimeout(() => ($("#bar > div").style.width = "0"), 900);
+}
+
+/* ---------------- 页码跳转 ---------------- */
+function jumpToPage() {
+  if (!INFO || !INFO.loaded) { openPicker(); return; }
+  const n = Number($("#jumpTo").value);
+  if (!Number.isInteger(n) || n < 1 || n > INFO.pages) {
+    $("#runStatus").textContent = `请输入 1–${INFO.pages} 之间的页码`;
+    return;
+  }
+  // 用几何坐标计算面板内偏移, 不受页眉/标签栏高度影响
+  const paneY = (pane, el) =>
+    el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+  suppress.left = suppress.right = performance.now() + 400;
+  lastTop.left = lastTop.right = n;
+  const l = document.getElementById("L" + n);
+  if (l) left.scrollTop = paneY(left, l) - 6;
+  const r = document.getElementById("R" + n);
+  if (r) {
+    right.scrollTop = paneY(right, r) - 6;
+    $("#runStatus").textContent = "";
+  } else {
+    $("#runStatus").textContent = `已跳到原文第 ${n} 页（该页译文尚未生成）`;
+  }
+  $("#jumpTo").value = "";
+  $("#jumpTo").placeholder = n + " / " + INFO.pages;
 }
 
 function renderPage(n, items) {
@@ -690,6 +888,10 @@ right.addEventListener("scroll", () => sync(right, left), { passive: true });
 
 /* ---------------- 交互 ---------------- */
 $("#btnRun").onclick = run;
+$("#jumpTo").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { jumpToPage(); e.target.blur(); }
+});
+$("#jumpTo").addEventListener("change", jumpToPage);
 $("#btnSync").onclick = (e) => {
   syncOn = !syncOn;
   e.target.textContent = "同步: " + (syncOn ? "开" : "关");
@@ -783,9 +985,10 @@ $("#pkList").addEventListener("click", (e) => {
 
 async function openFile(path) {
   const serial = ++fileSerial, previous = right.innerHTML;
-  // 切换文件前停掉正在进行的翻译流, 避免旧数据写入新文档
+  // 打开新文件前停掉当前翻译流并快照当前标签, 避免 busy 提示覆盖快照
   if (es) { es.close(); es = null; }
   running = false;
+  snapshotTab();
   closePicker();
   setBusyProg("正在解析 " + path.split(/[/\\]/).pop() + " …", null);
   try {
@@ -806,6 +1009,7 @@ function uploadFile(file) {
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }
   running = false;
+  snapshotTab();
   closePicker();
 
   const mb = (file.size / 1048576).toFixed(1);
@@ -863,11 +1067,7 @@ function setBusyProg(msg, pct) {
 const fmtMB = (b) => (b == null ? "" : (b / 1048576).toFixed(1) + " MB");
 
 async function reload(data) {
-  if (es) { es.close(); es = null; }
-  running = false;
-  $("#btnRun").textContent = "开始翻译";
-  right.innerHTML = `<div class="empty">设置页码范围后点击 <b>开始翻译</b></div>`;
-  await init(data);
+  addOrActivateTab(data);
 }
 
 $("#btnOpen").onclick = openPicker;
@@ -884,6 +1084,7 @@ async function openUrl() {
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }
   running = false;
+  snapshotTab();
   closePicker();
 
   const task = Math.random().toString(36).slice(2);

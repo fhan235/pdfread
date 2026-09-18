@@ -160,3 +160,29 @@ def test_failed_open_restarts_worker(client, tmp_path):
     bad.write_bytes(b"garbage")
     assert client.post("/api/open", params={"path": str(bad)}).status_code == 400
     assert server._pool is None
+
+
+def test_docs_list_close_and_dedupe(client, make_pdf):
+    first = opened(client, make_pdf("tab-a.pdf", "Document A."))
+    second = opened(client, make_pdf("tab-b.pdf", "Document B."))
+
+    listed = client.get("/api/docs").json()
+    assert listed["active"] == second["doc"]
+    assert [d["id"] for d in listed["docs"]] == [first["doc"], second["doc"]]
+
+    # 同一路径重复打开: 复用原 id, 不产生新文档
+    again = opened(client, make_pdf("tab-a.pdf", "Document A."))
+    assert again["doc"] == first["doc"]
+    assert len(client.get("/api/docs").json()["docs"]) == 2
+
+    # 关闭非活动文档: 活动文档不变
+    closed = client.post("/api/docs/close", json={"id": first["doc"]}).json()
+    assert closed["existed"] is True
+    assert client.get("/api/info", params={"doc": first["doc"]}).status_code == 410
+    assert client.get("/api/info").json()["doc"] == second["doc"]
+
+    # 关闭活动文档: 切到剩余文档; 全部关闭后回到未加载
+    client.post("/api/docs/close", json={"id": again["doc"]})
+    client.post("/api/docs/close", json={"id": second["doc"]})
+    assert client.get("/api/info").json()["loaded"] is False
+    assert client.post("/api/docs/close", json={"id": "ghost"}).json()["existed"] is False

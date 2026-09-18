@@ -131,7 +131,15 @@ def _cleanup_upload(path: Path) -> None:
 
 
 def _register(path: Path, data: dict, name: str | None = None) -> dict:
-    current = {**data, "path": path, "name": name or path.name, "id": uuid4().hex}
+    # 同一路径重复打开时复用原 id: 前端标签保持稳定, 不产生重复标签
+    doc_id = None
+    for old_id, old in list(STATE["docs"].items()):
+        if old["path"] == path:
+            doc_id = old_id
+            STATE["docs"].pop(old_id)
+            break
+    current = {**data, "path": path, "name": name or path.name,
+               "id": doc_id or uuid4().hex}
     STATE["docs"][current["id"]] = current
     while len(STATE["docs"]) > 16:
         STATE["docs"].pop(next(iter(STATE["docs"])))
@@ -188,6 +196,32 @@ def _sse(event: str, data: dict) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     return HTMLResponse((static_dir() / "index.html").read_text("utf-8"))
+
+
+@app.get("/api/docs")
+def list_docs() -> dict:
+    """列出当前打开的所有文档, 供前端恢复标签栏。"""
+    return {
+        "active": STATE["doc"]["id"] if STATE["doc"] else "",
+        "docs": [
+            {"id": d["id"], "name": d["name"], "title": d.get("title") or "",
+             "pages": len(d["pages"])}
+            for d in STATE["docs"].values()
+        ],
+    }
+
+
+@app.post("/api/docs/close")
+async def close_doc(payload: dict) -> dict:
+    """关闭一个文档标签; 若关闭的是当前文档则切到最近一个。"""
+    doc_id = str(payload.get("id", ""))
+    existed = STATE["docs"].pop(doc_id, None) is not None
+    if STATE["doc"] and STATE["doc"]["id"] == doc_id:
+        STATE.update(pdf=None, doc=None, pages=[], sizes=[])
+        if STATE["docs"]:
+            d = STATE["docs"][next(reversed(STATE["docs"]))]
+            STATE.update(pdf=d["path"], doc=d, pages=d["pages"], sizes=d["sizes"])
+    return {"ok": True, "existed": existed, **list_docs()}
 
 
 @app.get("/api/info")
