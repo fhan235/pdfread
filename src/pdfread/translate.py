@@ -61,6 +61,18 @@ SYSTEM_PROMPT = (
     "6. 数学公式、代码、变量名保持原样不译。"
 )
 
+POLISH_PROMPT = (
+    "你是资深中文编辑。用户会给你一页机器翻译的中文译文段落, "
+    "开头可能附有上文结尾供衔接参考。\n"
+    "请在**不改变原意**的前提下整体润色这页译文, 使上下文通畅、行文连续:\n"
+    "1. 统一术语与人称, 消除段落间的生硬断裂与重复表达。\n"
+    "2. 修正翻译腔, 调整为自然流畅的中文书面语。\n"
+    "3. 输入每段以 <<<序号>>> 开头, 输出必须保持完全相同的 <<<序号>>> 标记和段落数量。\n"
+    "4. 每段仍是连续的一整段, 内部不要换行; 不要合并或拆分段落。\n"
+    "5. 只输出润色后的正文, 不要解释, 不要输出上文参考部分。\n"
+    "6. 保留数字、单位、专有名词缩写与公式原样。"
+)
+
 _SEG = re.compile(r"<<<(\d+)>>>")
 
 
@@ -174,6 +186,8 @@ class Translator:
         self.cache = cache
         self.base_url, self.model, self._key = cfg.resolve()
         self.cache_model = "\x00".join((self.base_url, self.model, hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(), "v2"))
+        # 润色结果独立命名空间, 与逐段翻译缓存互不干扰
+        self.polish_model = "polish\x00" + "\x00".join((self.base_url, self.model, hashlib.sha256(POLISH_PROMPT.encode()).hexdigest(), "v1"))
         self._sem = asyncio.Semaphore(cfg.concurrency)
 
     def _pack(self, texts: list[str]) -> list[list[int]]:
@@ -192,11 +206,12 @@ class Translator:
             groups.append(cur)
         return groups
 
-    async def _call(self, client: httpx.AsyncClient, payload: str) -> str:
+    async def _call(self, client: httpx.AsyncClient, payload: str,
+                    prompt: str = SYSTEM_PROMPT) -> str:
         body = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": payload},
             ],
             "temperature": 0.2,
@@ -325,3 +340,50 @@ class Translator:
             await asyncio.gather(*(run(g) for g in groups))
 
         return result
+
+    # ---------- 整体润色(第二遍) ----------
+
+    def lookup(self, text: str, lang: str = "zh") -> str:
+        """只查翻译缓存不发请求; 任一分片未命中/失败都视为未翻译。"""
+        chunks = []
+        while len(text) > self.cfg.max_chars:
+            cut = text.rfind(" ", self.cfg.max_chars // 2, self.cfg.max_chars + 1)
+            cut = cut + 1 if cut >= 0 else self.cfg.max_chars
+            chunks.append(text[:cut])
+            text = text[cut:]
+        chunks.append(text)
+        keys = [Cache.key(c, self.cache_model, lang) for c in chunks]
+        cached = self.cache.get_many(keys)
+        parts = [cached.get(k, "") for k in keys]
+        if any(not p or p.startswith("[翻译失败]") for p in parts):
+            return ""
+        return " ".join(parts)
+
+    async def polish(self, texts: list[str], context: str, lang: str = "zh") -> list[str]:
+        """整体润色一组译文, context 为上一页的润色结尾(衔接上下文)。
+
+        结果按页缓存(含上文指纹, 前文变化自动失效重润); 个别段落润色
+        失败时回退为原译文, 保证输出永远与输入等长。
+        """
+        if not texts:
+            return []
+        ckey = Cache.key("\n".join(texts) + "\x00" + context[-100:],
+                         self.polish_model, lang)
+        hit = self.cache.get_many([ckey]).get(ckey)
+        if hit:
+            vals = hit.split("\x00")
+            if len(vals) == len(texts):
+                return vals
+
+        payload = "\n\n".join(f"<<<{i}>>>\n{t}" for i, t in enumerate(texts))
+        if context:
+            payload = ("[上文结尾，仅供衔接参考，不要输出这部分]\n" + context
+                       + "\n\n[本页译文，请润色]\n" + payload)
+        async with httpx.AsyncClient() as client:
+            async with self._sem:
+                reply = await self._call(client, payload, POLISH_PROMPT)
+        parts = self._unpack(reply, len(texts))
+        out = [parts[i] or texts[i] for i in range(len(texts))]
+        if all(parts):  # 只有完整返回才入缓存
+            self.cache.put_many([(ckey, "\x00".join(out))])
+        return out

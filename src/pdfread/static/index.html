@@ -208,6 +208,15 @@
   }
   @keyframes sk { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
 
+  /* ---------- 润色通读视图 ---------- */
+  /* 连续行文: 收窄居中, 页码退化为细分隔符 */
+  #right.polish-mode .pg { max-width: 780px; margin: 0 auto;
+              padding: 4px 32px 18px; }
+  #right.polish-mode .pg:first-child { padding-top: 26px; }
+  #right.polish-mode .pgno { position: static; opacity: .45;
+              font-size: 10px; letter-spacing: 2px; }
+  #right.polish-mode .para { margin-bottom: 12px; }
+
   .empty { color: var(--dim); text-align: center; padding: 60px 20px; }
   /* 打开进度 */
   .busywrap { max-width: 420px; margin: 18px auto 0; }
@@ -350,7 +359,9 @@
   <label>跳到</label>
   <input id="jumpTo" type="number" min="1" placeholder="页码"
          style="width:62px" title="输入页码后回车, 左右栏同时跳转" />
-  <button id="btnExp" class="ghost" title="导出当前已翻译内容">导出</button>
+  <button id="btnPolish" class="ghost"
+          title="对已翻译内容做第二遍整体润色，生成行文连续的通读版本（原逐页译文保留）">润色</button>
+  <button id="btnExp" class="ghost" title="导出当前视图内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
   <button id="btnSync" class="ghost">同步: 开</button>
   <button id="btnQuit" class="ghost quit" title="退出应用">退出</button>
@@ -526,6 +537,7 @@
 const $ = (s) => document.querySelector(s);
 const left = $("#left"), right = $("#right");
 let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
+let polishing = false, esP = null;
 let fileSerial = 0, leftObserver = null;
 
 /* ---------------- 多文档标签 ---------------- */
@@ -561,9 +573,12 @@ $("#tabbar").addEventListener("click", (e) => {
 function snapshotTab() {
   const t = curTab();
   if (!t) return;
+  // 右栏内容按当前视图分别存档: 逐页译文 / 润色全文互不覆盖
+  if (t.view === "polished") t.polishedHTML = right.innerHTML;
+  else t.rightHTML = right.innerHTML;
   Object.assign(t, {
     info: INFO,
-    leftHTML: left.innerHTML, rightHTML: right.innerHTML,
+    leftHTML: left.innerHTML,
     leftTop: left.scrollTop, rightTop: right.scrollTop,
     pStart: $("#pStart").value, pEnd: $("#pEnd").value,
   });
@@ -593,11 +608,14 @@ function restoreTab(t) {
     }
   } else {
     left.innerHTML = t.leftHTML;
-    right.innerHTML = t.rightHTML;
+    right.innerHTML = (t.view === "polished" && t.polishedHTML != null)
+      ? t.polishedHTML : (t.rightHTML ?? "");
     left.scrollTop = t.leftTop || 0;
     right.scrollTop = t.rightTop || 0;
     attachLeftObserver();  // 恢复后重新接管未加载的占位图
   }
+  right.classList.toggle("polish-mode", t.view === "polished");
+  $("#btnPolish").textContent = t.view === "polished" ? "逐页" : "润色";
   $("#pStart").value = t.pStart ?? 1;
   $("#pEnd").value = t.pEnd ?? 0;
   suppress.left = suppress.right = 0;
@@ -606,16 +624,18 @@ function restoreTab(t) {
 
 function switchTab(id) {
   if (id === activeTab || !tabs.some((t) => t.id === id)) return;
-  const wasRunning = running;
+  const wasRunning = running || polishing;
   if (es) { es.close(); es = null; }
+  if (esP) { esP.close(); esP = null; }
   running = false;
+  polishing = false;
   const old = curTab();
   if (old) old.running = false;
   $("#btnRun").textContent = "开始翻译";
   snapshotTab();
   restoreTab(tabs.find((t) => t.id === id));
   $("#runStatus").textContent = wasRunning
-    ? "已切换文档，翻译已停止（已翻部分在缓存中，重新翻译可秒出）" : "";
+    ? "已切换文档，任务已停止（已完成部分在缓存中，重新执行可秒出）" : "";
   renderTabs();
 }
 
@@ -623,6 +643,7 @@ async function closeTab(id) {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx < 0) return;
   if (id === activeTab && es) { es.close(); es = null; }
+  if (id === activeTab && esP) { esP.close(); esP = null; polishing = false; }
   fetch("/api/docs/close", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
@@ -654,9 +675,11 @@ function addOrActivateTab(data) {
   let t = tabs.find((x) => x.id === data.doc);
   if (t) {
     Object.assign(t, { info: data, leftHTML: null, rightHTML: null,
+                       polishedHTML: null, view: "pages",
                        pStart: 1, pEnd: 0, running: false });
   } else {
     t = { id: data.doc, info: data, leftHTML: null, rightHTML: null,
+          polishedHTML: null, view: "pages",
           pStart: 1, pEnd: 0, running: false };
     tabs.push(t);
   }
@@ -678,6 +701,7 @@ async function init(data = null) {
       if (!r.ok) continue;  // 已过期(如被并发关闭)则跳过
       const infoData = await r.json();
       tabs.push({ id: d.id, info: infoData, leftHTML: null, rightHTML: null,
+                  polishedHTML: null, view: "pages",
                   pStart: 1, pEnd: 0, running: false });
     } catch (e) { /* 单个恢复失败不影响其余 */ }
   }
@@ -773,6 +797,12 @@ window.addEventListener("resize", () => {
 /* ---------------- 翻译（SSE 流式） ---------------- */
 function run() {
   if (running) { es && es.close(); finish(); return; }
+  if (polishing) { $("#runStatus").textContent = "润色进行中，请先停止或等待完成"; return; }
+  const t0 = curTab();
+  if (t0 && t0.view === "polished") {
+    $("#runStatus").textContent = "当前是润色通读视图，点顶栏「逐页」返回后再翻译";
+    return;
+  }
   if (!INFO || !INFO.loaded) { openPicker(); return; }
   if (!INFO.ready) { openCfg(); return; }
 
@@ -846,6 +876,109 @@ function jumpToPage() {
   }
   $("#jumpTo").value = "";
   $("#jumpTo").placeholder = n + " / " + INFO.pages;
+}
+
+/* ---------------- 整体润色(第二遍) ---------------- */
+function togglePolish() {
+  if (polishing) {  // 进行中再点 = 停止
+    if (esP) { esP.close(); esP = null; }
+    finishPolish("已停止，已完成页面保留在缓存中");
+    return;
+  }
+  const t = curTab();
+  if (!INFO || !INFO.loaded || !t) { openPicker(); return; }
+
+  if (t.view === "polished") {  // 返回逐页对照视图
+    t.polishedHTML = right.innerHTML;
+    t.view = "pages";
+    right.classList.remove("polish-mode");
+    right.innerHTML = t.rightHTML
+      || `<div class="empty">点击 <b>开始翻译</b> 默认翻译全文</div>`;
+    $("#btnPolish").textContent = "润色";
+    $("#runStatus").textContent = "";
+    return;
+  }
+
+  // 已有润色结果 -> 直接切换, 不重复消耗
+  if (t.polishedHTML != null) {
+    t.rightHTML = right.innerHTML;
+    t.view = "polished";
+    right.classList.add("polish-mode");
+    right.innerHTML = t.polishedHTML;
+    right.scrollTop = 0;
+    $("#btnPolish").textContent = "逐页";
+    $("#runStatus").textContent = "";
+    return;
+  }
+  startPolish(t);
+}
+
+function startPolish(t) {
+  if (running) { $("#runStatus").textContent = "翻译进行中，请先停止"; return; }
+  if (!INFO.ready) { openCfg(); return; }
+  const chars = (INFO.chars / 10000).toFixed(1);
+  if (!confirm(`将对全部已翻译内容（原文约 ${chars} 万字符）做第二遍整体润色，`
+    + `消耗与全文翻译相当的额度，耗时也与全文翻译相当。\n`
+    + `未翻译的页会跳过；原逐页译文保留不动。\n\n继续？`)) return;
+
+  t.rightHTML = right.innerHTML;
+  t.view = "polished";
+  right.classList.add("polish-mode");
+  $("#btnPolish").textContent = "停止润色";
+  // 复用 R{页码} 骨架, renderPage / 跳转 / 导出 / 滚动同步全部沿用
+  right.innerHTML = "";
+  for (let i = 1; i <= INFO.pages; i++) {
+    const d = document.createElement("div");
+    d.className = "pg"; d.id = "R" + i;
+    d.innerHTML = `<span class="pgno">${i} / ${INFO.pages}</span>`
+      + `<div class="skeleton">等待润色…</div>`;
+    right.appendChild(d);
+  }
+  right.scrollTop = 0;
+
+  polishing = true;
+  let done = 0, skipped = 0;
+  esP = new EventSource(`/api/polish?doc=${INFO.doc}`);
+  const stream = esP;
+  esP.addEventListener("page", (ev) => {
+    const d = JSON.parse(ev.data);
+    if (esP !== stream || d.doc !== INFO.doc) return;
+    if (d.skip) {
+      skipped++;
+      const box = document.getElementById("R" + d.page);
+      if (box) box.innerHTML = `<span class="pgno">${d.page} / ${INFO.pages}</span>`
+        + `<div class="skeleton" style="opacity:.4">（本页尚未翻译，已跳过）</div>`;
+    } else {
+      renderPage(d.page, d.items);
+    }
+    done++;
+    $("#bar > div").style.width = (done / INFO.pages * 100) + "%";
+  });
+  esP.addEventListener("done", (ev) => {
+    if (esP !== stream) return;
+    const d = JSON.parse(ev.data);
+    finishPolish(d.skipped ? `润色完成（${d.skipped} 页未翻译被跳过）` : "润色完成");
+  });
+  esP.addEventListener("failure", (ev) => {
+    if (esP !== stream) return;
+    const d = JSON.parse(ev.data);
+    finishPolish(d.message || "润色中断");
+  });
+  esP.onerror = () => { if (esP === stream) finishPolish("连接中断"); };
+}
+
+function finishPolish(msg) {
+  polishing = false;
+  if (esP) { esP.close(); esP = null; }
+  const t = curTab();
+  if (t && t.view === "polished") {
+    t.polishedHTML = right.innerHTML;  // 留下半成品, 下次直接续看
+    $("#btnPolish").textContent = "逐页";
+  } else {
+    $("#btnPolish").textContent = "润色";
+  }
+  if (msg) $("#runStatus").textContent = msg;
+  setTimeout(() => ($("#bar > div").style.width = "0"), 900);
 }
 
 function renderPage(n, items) {
@@ -924,6 +1057,7 @@ $("#jumpTo").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { jumpToPage(); e.target.blur(); }
 });
 $("#jumpTo").addEventListener("change", jumpToPage);
+$("#btnPolish").onclick = togglePolish;
 $("#btnSync").onclick = (e) => {
   syncOn = !syncOn;
   e.target.textContent = "同步: " + (syncOn ? "开" : "关");

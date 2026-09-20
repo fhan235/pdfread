@@ -239,3 +239,52 @@ def test_epub_open_translate_and_chapter(client, tmp_path, make_pdf):
     pdf = opened(client, make_pdf())
     assert client.get("/api/chapter/1", params={"doc": pdf["doc"]}).status_code == 400
     assert client.get("/api/page/1.png", params={"doc": pdf["doc"]}).status_code == 200
+
+
+def test_polish_uses_translation_cache_and_carries_context(client, monkeypatch, tmp_path):
+    doc = server._register(tmp_path / "syn2.pdf", {
+        "pages": [[Para(0, "aaa", "body", 1)], [Para(0, "bbb", "body", 1)],
+                  [Para(0, "ccc", "body", 1)]],
+        "sizes": [(600, 800)] * 3, "title": "", "stamp": (0, 0)})
+    tr = server.Translator(server.STATE["cfg"], server.STATE["cache"])
+    # 只预置第 1、2 页的译文, 第 3 页未翻译应被跳过
+    server.STATE["cache"].put_many([
+        (server.Cache.key("aaa", tr.cache_model, "zh"), "译文甲"),
+        (server.Cache.key("bbb", tr.cache_model, "zh"), "译文乙"),
+    ])
+    calls = []
+    async def fake_call(self, client_, payload, prompt="p"):
+        calls.append(payload)
+        return "<<<0>>>\n润色" + ("甲" if "译文甲" in payload else "乙")
+    monkeypatch.setattr(server.Translator, "_call", fake_call)
+
+    r = client.get("/api/polish", params={"doc": doc["id"]})
+    assert r.status_code == 200
+    assert '"page": 1' in r.text and '"page": 2' in r.text
+    assert '"skip": true' in r.text            # 第 3 页未翻译
+    assert "润色甲" in r.text and "润色乙" in r.text
+    assert len(calls) == 2
+    assert "润色甲" in calls[1]                # 第 2 页携带了上文结尾
+    assert "<<<0>>>" in calls[0]
+
+    # 第二次运行全部命中缓存, 不再发请求
+    r2 = client.get("/api/polish", params={"doc": doc["id"]})
+    assert len(calls) == 2
+    assert "润色甲" in r2.text
+
+
+def test_polish_paragraph_fallback_on_bad_reply(client, monkeypatch, tmp_path):
+    doc = server._register(tmp_path / "syn3.pdf", {
+        "pages": [[Para(0, "p0", "body", 1), Para(1, "p1", "body", 2)]],
+        "sizes": [(600, 800)], "title": "", "stamp": (0, 0)})
+    tr = server.Translator(server.STATE["cfg"], server.STATE["cache"])
+    server.STATE["cache"].put_many([
+        (server.Cache.key("p0", tr.cache_model, "zh"), "译文零"),
+        (server.Cache.key("p1", tr.cache_model, "zh"), "译文一"),
+    ])
+    async def bad_reply(self, client_, payload, prompt="p"):
+        return "<<<0>>>\n润色零"  # 第 2 段标记缺失
+    monkeypatch.setattr(server.Translator, "_call", bad_reply)
+    r = client.get("/api/polish", params={"doc": doc["id"]})
+    # 缺失段落回退为原译文, 不丢内容
+    assert "润色零" in r.text and "译文一" in r.text

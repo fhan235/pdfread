@@ -672,6 +672,68 @@ async def translate_stream(
     )
 
 
+@app.get("/api/polish")
+async def polish_stream(doc: str = "", lang: str = "zh") -> StreamingResponse:
+    """整体润色(第二遍): 取全部已缓存译文, 逐页顺序润色,
+    每页携带上一页润色结尾约 300 字作为衔接上下文。"""
+    current = _document(doc)
+    pages = current["pages"]
+    if not pages:
+        raise HTTPException(400, "尚未加载文档")
+    if lang != "zh":
+        raise HTTPException(400, "目标语言仅支持 zh")
+
+    cfg: TransConfig = replace(STATE["cfg"])
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+    async def gen():
+        from .paper import unmask_formulas
+        context = ""
+        skipped = 0
+        try:
+            yield _sse("meta", {"total": len(pages), "doc": current["id"]})
+            for n in range(1, len(pages) + 1):
+                idxs, kinds, srcs, dsts = [], [], [], []
+                for p in pages[n - 1]:
+                    if not _translatable(getattr(p, "kind", "body")):
+                        continue
+                    formulas = getattr(p, "formulas", None) or {}
+                    dst = tr.lookup(p.text, lang)
+                    if not dst:
+                        continue
+                    src = unmask_formulas(p.text, formulas) if formulas else p.text
+                    dst = unmask_formulas(dst, formulas) if formulas else dst
+                    idxs.append(p.idx)
+                    kinds.append(p.kind)
+                    srcs.append(src)
+                    dsts.append(dst)
+                if not dsts:
+                    skipped += 1
+                    yield _sse("page", {"page": n, "skip": True,
+                                        "doc": current["id"]})
+                    continue
+                polished = await tr.polish(dsts, context, lang)
+                context = polished[-1][-300:]
+                items = [{"idx": i, "kind": k, "src": s, "dst": d,
+                          "status": "success"}
+                         for i, k, s, d in zip(idxs, kinds, srcs, polished)]
+                yield _sse("page", {"page": n, "items": items,
+                                    "doc": current["id"]})
+            yield _sse("done", {"ok": True, "skipped": skipped})
+        except Exception:
+            yield _sse("failure",
+                       {"message": "润色任务中断，请重试；已完成页面保留在缓存中"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/raw")
 async def raw_pdf(doc: str = "") -> FileResponse:
     current = _document(doc)
