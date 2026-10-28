@@ -3,8 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
-const html = fs.readFileSync('src/pdfread/static/index.html', 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].split('/* 启动:')[0];
+// 前端按功能拆成多个经典脚本, 共享全局作用域, 加载顺序即依赖顺序
+const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'panels', 'ui', 'prefs'];
+const script = JS_FILES
+  .map((f) => fs.readFileSync(`src/pdfread/static/js/${f}.js`, 'utf8'))
+  .join('\n')
+  .split('/* 启动:')[0];
 
 function setup() {
   const elements = new Map();

@@ -12,6 +12,17 @@ def opened(client, path):
     return response.json()
 
 
+def test_static_files_served_and_contained(client):
+    assert client.get("/").status_code == 200
+    css = client.get("/static/style.css")
+    assert css.status_code == 200 and "--accent" in css.text
+    js = client.get("/static/js/state.js")
+    assert js.status_code == 200 and "querySelector" in js.text
+    assert client.get("/static/../server.py").status_code == 404
+    assert client.get("/static/%2e%2e/server.py").status_code == 404
+    assert client.get("/static/js/../../pyproject.toml").status_code == 404
+
+
 def test_bad_pdf_preserves_current_document(client, make_pdf, tmp_path):
     good = opened(client, make_pdf())
     bad = tmp_path / "bad.pdf"
