@@ -51,11 +51,15 @@
     padding: 10px 16px; background: var(--panel);
     border-bottom: 1px solid var(--line); flex: 0 0 auto;
   }
-  header .title {
-    font-weight: 600; max-width: 32vw;
+  /* ---------- 文档标题栏(功能栏下面一行) ---------- */
+  #docbar { display: flex; align-items: baseline; gap: 10px;
+            padding: 6px 16px; background: var(--panel);
+            border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  #docbar .title {
+    font-weight: 600; max-width: 60vw;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  header .meta { color: var(--dim); font-size: 12px; }
+  #docbar .meta { color: var(--dim); font-size: 12px; }
   .spacer { flex: 1; }
   button {
     background: var(--accent); color: #fff; border: 0;
@@ -67,6 +71,7 @@
                     color: var(--dim); cursor: not-allowed; }
   button.ghost { background: transparent; border: 1px solid var(--line);
                  color: var(--fg); }
+  button.ghost.on { border-color: var(--accent); color: var(--accent); }
   button.quit:hover { border-color: #ff7a7a; color: #ff7a7a; }
 
   /* ---------- 退出遮罩 ---------- */
@@ -93,6 +98,19 @@
   .fontctl .fv { min-width: 34px; font-size: 12px; color: var(--dim);
                  text-align: right; font-variant-numeric: tabular-nums; }
   body.light .fontctl input[type="range"] { background: transparent; }
+  /* 纸张 / 护眼主题: 在浅色体系上只覆盖配色变量 */
+  body.theme-paper {
+    --bg: #f4efe2; --panel: #faf6ec; --line: #ddd4bb;
+    --fg: #3b352a; --dim: #8b8170;
+    --accent: #a8762a; --ok: #3e8e5f; --warn: #b5720e;
+  }
+  body.theme-paper #left { background: #eae4d3; }
+  body.theme-green {
+    --bg: #e4eee5; --panel: #f0f5ef; --line: #c9d8c6;
+    --fg: #243427; --dim: #647a61;
+    --accent: #35804d; --ok: #2e7d52; --warn: #a06808;
+  }
+  body.theme-green #left { background: #d9e4d7; }
   input:focus, select:focus { outline: 1px solid var(--accent); }
   label { color: var(--dim); font-size: 12px; }
 
@@ -131,14 +149,39 @@
   main { flex: 1; display: flex; min-height: 0; }
   .pane { flex: 1; overflow-y: auto; overflow-x: hidden;
           scroll-behavior: auto; }
-  #left  { background: #0d0f14; border-right: 1px solid var(--line); }
+  #left  { background: #0d0f14; border-right: 1px solid var(--line);
+           overflow-x: auto; }
+  /* PDF 缩放: 页面宽度按比例放大, 超出栏宽可横向滚动 */
+  #left .imgwrap { width: calc(var(--zoom, 1) * 100%); margin: 0 auto; }
+  .zoomctl { display: flex; align-items: center; gap: 5px; }
+  .zoomctl button { padding: 2px 9px; font-size: 14px; line-height: 1.4; }
+  .zoomctl .zv { min-width: 44px; text-align: center; font-size: 12px;
+                 color: var(--dim); font-variant-numeric: tabular-nums;
+                 cursor: pointer; user-select: none; }
+  .zoomctl .zv:hover { color: var(--accent); }
   #right { background: var(--bg); }
+
+  /* ---------- 面板分割条 ---------- */
+  .splitter { display: none; flex: 0 0 5px; background: transparent;
+              cursor: col-resize; z-index: 6; }
+  .splitter:hover, .splitter.drag { background: var(--accent); }
+  body.lib #splitLib, body.qa #splitQA { display: block; }
+  #splitLR { display: block; margin: 0 -3px; }  /* 扩大热区, 不挤占版面 */
+  main.tronly #splitLR, main.pdfonly #splitLR { display: none; }
+  main.stacked #splitLR { cursor: row-resize; margin: -3px 0; }
 
   /* ---------- 布局模式 ---------- */
   main.stacked { flex-direction: column; }
   main.stacked #left { border-right: 0; border-bottom: 1px solid var(--line);
                        max-height: 50%; }
   main.tronly #left { display: none; }
+  /* 仅原文: 隐藏译文栏, PDF 铺满 */
+  main.pdfonly #right { display: none; }
+  main.pdfonly #left { border-right: 0; }
+  /* 仅原文: 缩放作用于限宽容器本身(而不是容器内再溢出), 保持居中 */
+  main.pdfonly #left .pg { margin: 0 auto;
+                           max-width: calc(960px * var(--zoom, 1)); }
+  main.pdfonly #left .imgwrap { width: 100%; }
   /* 仅译文模式: 保留阅读宽度上限并居中, 避免整行横跨宽屏 */
   main.tronly #right .pg { margin: 0 auto; max-width: 960px; }
 
@@ -331,15 +374,114 @@
   #cfg .tip { padding: 11px 16px; font-size: 12px; color: var(--dim);
               line-height: 1.6; border-top: 1px solid var(--line);
               background: #0e1016; }
+
+  /* ---------- 文库侧栏 ---------- */
+  #bodywrap { flex: 1; display: flex; min-height: 0; }
+  main { min-width: 0; }
+  #libView { display: none; flex-direction: column; width: 320px;
+             flex: 0 0 auto; min-height: 0;
+             border-right: 1px solid var(--line); }
+  body.lib #libView { display: flex; }
+  #libSide { flex: 0 0 auto; overflow-y: auto; max-height: 42%;
+             background: var(--panel); border-bottom: 1px solid var(--line);
+             padding: 10px 8px; }
+  .libgrp { margin-bottom: 18px; }
+  .libgrp > h4 { margin: 0 6px 7px; font-size: 11px; font-weight: 600;
+                 color: var(--dim); letter-spacing: 1.5px;
+                 display: flex; align-items: center; }
+  .libgrp > h4 button { font-size: 11px; padding: 1px 9px; }
+  .libitem { display: flex; align-items: center; gap: 5px;
+             padding: 6px 10px; border-radius: 6px; font-size: 13px;
+             cursor: pointer; user-select: none; }
+  .libitem:hover { background: #ffffff10; }
+  .libitem.on { background: #4f8cff22; color: var(--accent); }
+  .libitem .nm { flex: 1; overflow: hidden; white-space: nowrap;
+                 text-overflow: ellipsis; }
+  .libitem .cnt { font-size: 11px; color: var(--dim); }
+  .libitem .fx { display: none; border: 0; background: transparent;
+                 color: var(--dim); cursor: pointer; padding: 0 3px;
+                 font-size: 13px; border-radius: 3px; line-height: 1.3; }
+  .libitem:hover .fx { display: inline; }
+  .libitem .fx:hover { color: #ff7a7a; }
+  body.light .libitem:hover { background: #00000008; }
+  #libMain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .libbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .libbar input { flex: 1; min-width: 120px; }
+  #libList { flex: 1; overflow-y: auto; padding: 10px 12px 40px; }
+  .doc { border: 1px solid var(--line); border-radius: 8px;
+         background: var(--panel); padding: 11px 15px; margin-bottom: 10px; }
+  .doc.gone { opacity: .55; }
+  .doc .t { font-weight: 600; cursor: pointer; width: fit-content;
+            max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .doc .t:hover { color: var(--accent); }
+  .doc .m { color: var(--dim); font-size: 12px; margin-top: 3px; }
+  .doc .tagsrow { display: flex; align-items: center; gap: 6px;
+                  flex-wrap: wrap; margin-top: 7px; min-height: 20px; }
+  .chip { background: #4f8cff1e; color: var(--accent); font-size: 11.5px;
+          border-radius: 999px; padding: 1px 9px; }
+  .tagbtn { background: transparent; border: 1px dashed var(--line);
+            color: var(--dim); border-radius: 999px; padding: 0 9px;
+            font-size: 11px; cursor: pointer; }
+  .tagbtn:hover { color: var(--accent); border-color: var(--accent); }
+  .tagedit { flex: 1; font-size: 12.5px; }
+  .doc .ops { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .doc .ops button { font-size: 12px; padding: 4px 12px; }
+  .doc .ops select { font-size: 12px; padding: 3px 6px; max-width: 160px; }
+
+  /* ---------- AI 问答面板 ---------- */
+  #qaPanel { display: none; width: 340px; flex: 0 0 auto; min-height: 0;
+             flex-direction: column; background: var(--panel);
+             border-left: 1px solid var(--line); }
+  body.qa #qaPanel { display: flex; }
+  #qaHint { padding: 8px 12px; font-size: 11px; color: var(--dim);
+            border-bottom: 1px solid var(--line); }
+  #qaList { flex: 1; overflow-y: auto; padding: 12px; }
+  .qmsg { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px;
+          font-size: 13px; line-height: 1.7; word-break: break-word; }
+  .qmsg .md-h3 { font-weight: 650; font-size: 14px; margin: 9px 0 4px; }
+  .qmsg .md-h4 { font-weight: 600; font-size: 13px; margin: 7px 0 3px; }
+  .qmsg p { margin: 0 0 6px; }
+  .qmsg p:last-child { margin-bottom: 0; }
+  .qmsg ul, .qmsg ol { margin: 0 0 6px; padding-left: 20px; }
+  .qmsg code { background: #ffffff14; border-radius: 3px;
+               padding: 0 4px; font-size: 12px; }
+  body.light .qmsg code { background: #00000010; }
+  .qmsg.user { background: #4f8cff26; margin-left: 28px; }
+  .qmsg.bot { background: #ffffff0a; margin-right: 28px; }
+  body.light .qmsg.bot { background: #00000007; }
+  .qmsg.err { color: #ff7a7a; }
+  .qabar { display: flex; gap: 8px; align-items: flex-end;
+           padding: 10px 12px; border-top: 1px solid var(--line); }
+  #qaIn { flex: 1; resize: none; height: 56px; font-family: inherit;
+          background: #0e1016; color: var(--fg);
+          border: 1px solid var(--line); border-radius: 6px;
+          padding: 6px 9px; font-size: 13px; }
+  body.light #qaIn { background: #fff; }
+  #qaIn:focus { outline: 1px solid var(--accent); }
+  #qaSend { flex: 0 0 auto; }
+
+  /* ---------- 划线高亮 ---------- */
+  .imgwrap { position: relative; }
+  .imgwrap img { -webkit-user-drag: none; user-select: none; }
+  .hlayer { position: absolute; inset: 0; cursor: text; }
+  .hl { position: absolute; background: #ffd54a; opacity: .38;
+        mix-blend-mode: multiply; border-radius: 2px; cursor: pointer; }
+  .hl:hover { opacity: .55; }
+  .hl.preview { opacity: .28; pointer-events: none; }
+  #hlPop, #hlConfirm { display: none; position: fixed; z-index: 70;
+           background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; padding: 6px;
+           box-shadow: 0 8px 24px #00000080; }
+  #hlPop button, #hlConfirm button { font-size: 12px; padding: 4px 12px; }
 </style>
 </head>
 <body>
 
 <header>
-  <span class="title" id="docTitle">未加载文档</span>
-  <span class="meta" id="docMeta"></span>
   <span class="spacer"></span>
 
+  <button id="btnLib" class="ghost" title="文档库：文件夹与标签管理">文库</button>
   <button id="btnOpen" class="ghost" title="选择或上传 PDF / EPUB">打开</button>
   <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
   <button id="btnTheme" class="ghost" title="切换深色/浅色主题">深色</button>
@@ -348,6 +490,11 @@
     <input id="fontRange" type="range" min="12" max="22" step="0.5" value="15" />
     <span class="a lg">A</span>
     <span class="fv" id="fontVal">15</span>
+  </span>
+  <span class="zoomctl" title="PDF 缩放（点百分比复位 100%）">
+    <button id="zoomOut" class="ghost">−</button>
+    <span class="zv" id="zoomVal">100%</span>
+    <button id="zoomIn" class="ghost">＋</button>
   </span>
   <label>页</label>
   <input id="pStart" type="number" min="1" value="1" style="width:62px" />
@@ -363,16 +510,55 @@
           title="对已翻译内容做第二遍整体润色，生成行文连续的通读版本（原逐页译文保留）">润色</button>
   <button id="btnExp" class="ghost" title="导出当前视图内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
+  <button id="btnPane" class="ghost" title="只看 PDF / 恢复译文栏">译文栏: 开</button>
+  <button id="btnQA" class="ghost" title="基于当前文档的 AI 问答">AI 问答</button>
   <button id="btnSync" class="ghost">同步: 开</button>
   <button id="btnQuit" class="ghost quit" title="退出应用">退出</button>
 </header>
+
+<div id="docbar">
+  <span class="title" id="docTitle">未加载文档</span>
+  <span class="meta" id="docMeta"></span>
+</div>
 
 <div id="tabbar"></div>
 <div id="bar"><div></div></div>
 <div id="runStatus" role="status" style="padding:0 16px;color:var(--dim)"></div>
 
+<div id="bodywrap">
+
+<div id="libView">
+  <aside id="libSide">
+    <div class="libgrp">
+      <h4>文库</h4>
+      <div class="libitem" data-scope="all"><span class="nm">全部文档</span>
+        <span class="cnt" id="cntAll"></span></div>
+      <div class="libitem" data-scope="none"><span class="nm">未分类</span>
+        <span class="cnt" id="cntNone"></span></div>
+    </div>
+    <div class="libgrp">
+      <h4>文件夹<span class="spacer"></span>
+        <button id="btnNewFolder" class="ghost">新建</button></h4>
+      <div id="libFolders"></div>
+    </div>
+    <div class="libgrp">
+      <h4>标签</h4>
+      <div id="libTags"></div>
+    </div>
+  </aside>
+  <div id="libMain">
+    <div class="libbar">
+      <input id="libSearch" placeholder="搜索标题、文件名、标签…" />
+      <button id="btnImport" class="ghost">导入文件</button>
+    </div>
+    <div id="libList"></div>
+  </div>
+</div>
+<div class="splitter" id="splitLib" title="拖拽调整文库宽度"></div>
+
 <main>
   <div class="pane" id="left"></div>
+  <div class="splitter" id="splitLR" title="拖拽调整左右栏比例"></div>
   <div class="pane" id="right">
     <div class="empty">
       点击 <b>开始翻译</b> 默认翻译全文，可在顶栏调整页码范围<br /><br />
@@ -384,6 +570,22 @@
     </div>
   </div>
 </main>
+
+<div class="splitter" id="splitQA" title="拖拽调整问答面板宽度"></div>
+<aside id="qaPanel">
+  <div id="qaHint"></div>
+  <div id="qaList"></div>
+  <div class="qabar">
+    <textarea id="qaIn" rows="2"
+      placeholder="就当前文档提问，Enter 发送 / Shift+Enter 换行"></textarea>
+    <button id="qaSend">发送</button>
+  </div>
+</aside>
+
+</div><!-- /#bodywrap -->
+
+<div id="hlPop"><button id="hlDel" class="ghost">删除划线</button></div>
+<div id="hlConfirm"><button id="hlOk">确认划线</button></div>
 
 <div id="picker">
   <div class="box">
@@ -455,6 +657,8 @@
           <div class="seg" id="segTheme">
             <button data-v="dark">深色</button>
             <button data-v="light">浅色</button>
+            <button data-v="paper">纸张</button>
+            <button data-v="green">护眼</button>
           </div>
         </div>
         <div class="fld">
@@ -471,6 +675,7 @@
             <button data-v="side">左右对照</button>
             <button data-v="stack">上下对照</button>
             <button data-v="tronly">仅译文</button>
+            <button data-v="pdfonly">仅原文</button>
           </div>
         </div>
         <label class="chk"><input type="checkbox" id="cbItalic" />
@@ -540,6 +745,7 @@ let INFO = null, syncOn = true, showSrc = false, running = false, es = null;
 let polishing = false, esP = null;
 let fileSerial = 0, leftObserver = null;
 
+
 /* ---------------- 多文档标签 ---------------- */
 /* 每个标签保存一份面板快照(HTML+滚动位置+页码范围),
    切换时恢复; 未激活标签的翻译流会停掉, 已翻段落留在服务端缓存,
@@ -571,6 +777,7 @@ $("#tabbar").addEventListener("click", (e) => {
 });
 
 function snapshotTab() {
+  discardPending();   // 切换/关闭标签前取消未确认的划线预览
   const t = curTab();
   if (!t) return;
   // 右栏内容按当前视图分别存档: 逐页译文 / 润色全文互不覆盖
@@ -581,6 +788,7 @@ function snapshotTab() {
     leftHTML: left.innerHTML,
     leftTop: left.scrollTop, rightTop: right.scrollTop,
     pStart: $("#pStart").value, pEnd: $("#pEnd").value,
+    qaHist: qaHist,
   });
 }
 
@@ -616,6 +824,8 @@ function restoreTab(t) {
   }
   right.classList.toggle("polish-mode", t.view === "polished");
   $("#btnPolish").textContent = t.view === "polished" ? "逐页" : "润色";
+  qaHist = t.qaHist || [];
+  renderQA();
   $("#pStart").value = t.pStart ?? 1;
   $("#pEnd").value = t.pEnd ?? 0;
   suppress.left = suppress.right = 0;
@@ -669,6 +879,7 @@ async function closeTab(id) {
 
 /* 打开成功后的统一入口: 已有同 id 标签则重建, 否则新建标签 */
 function addOrActivateTab(data) {
+  if (document.body.classList.contains("lib")) loadLibrary();  // 侧栏打开时即时反映新入库
   if (es) { es.close(); es = null; }
   running = false;
   $("#btnRun").textContent = "开始翻译";
@@ -708,15 +919,16 @@ async function init(data = null) {
   if (!tabs.length) {
     activeTab = null;
     $("#docTitle").textContent = "未加载 PDF";
-    $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
+    $("#docMeta").textContent = "在文库中导入或打开文档";
     left.innerHTML = "";
     renderTabs();
-    openPicker();
+    showLibrary();
     return;
   }
   restoreTab(tabs.find((t) => t.id === saved) || tabs[tabs.length - 1]);
   renderTabs();
 }
+
 
 /* ------------- 左栏：懒加载页面位图 ------------- */
 // 按实际显示宽度与设备像素比计算所需 DPI, 高分屏不再模糊
@@ -740,10 +952,13 @@ function buildLeft() {
     d.innerHTML = `<span class="pgno">${i} / ${INFO.pages}</span>`
       + (epub
         ? `<div class="echapter" data-p="${i}"><span class="loading">章节加载中…</span></div>`
-        : `<img data-p="${i}" style="aspect-ratio:${w}/${h}" alt="第 ${i} 页" />`);
+        : `<div class="imgwrap"><img data-p="${i}" style="aspect-ratio:${w}/${h}"`
+          + ` alt="第 ${i} 页" draggable="false" /><div class="hlayer"></div></div>`);
     left.appendChild(d);
   }
   attachLeftObserver();
+  centerLeft();   // 持久化的放大倍率下, 打开文档即居中
+  loadMarks();
 }
 
 /* 进入视口才真正请求内容，98 页也不卡; 标签恢复后也需要重新接管占位图 */
@@ -790,7 +1005,7 @@ window.addEventListener("resize", () => {
     if (!leftObserver || !INFO || INFO.fmt === "epub") return;
     if (lastW && Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
     lastW = left.clientWidth;
-    left.querySelectorAll(".pg > img").forEach((i) => leftObserver.observe(i));
+    left.querySelectorAll(".pg img").forEach((i) => leftObserver.observe(i));
   }, 300);
 }, { passive: true });
 
@@ -1051,6 +1266,654 @@ function sync(from, to) {
 left.addEventListener("scroll", () => sync(left, right), { passive: true });
 right.addEventListener("scroll", () => sync(right, left), { passive: true });
 
+
+/* ---------------- 文库视图 ---------------- */
+let LIB = null;                                  // {folders, tags, documents}
+let libScope = { kind: "all", id: 0, name: "" }; // all | none | folder | tag
+let libQuery = "";
+
+/* 文库为侧栏, 与阅读区共存; 开关只控制侧栏显隐, 状态记入偏好 */
+function showLibrary() {
+  document.body.classList.add("lib");
+  $("#btnLib").classList.add("on");
+  prefs.lib = true;
+  savePrefs();
+  loadLibrary();
+}
+function showReader() {
+  document.body.classList.remove("lib");
+  $("#btnLib").classList.remove("on");
+  prefs.lib = false;
+  savePrefs();
+}
+
+async function loadLibrary() {
+  try {
+    const d = await (await fetch("/api/library")).json();
+    LIB = d && Array.isArray(d.documents) ? d : null;
+  } catch (e) { LIB = null; }
+  if (!LIB) LIB = { folders: [], tags: [], documents: [] };
+  renderLibrary();
+}
+
+function docRow(d) {
+  const opts = [`<option value="">未分类</option>`].concat(LIB.folders.map((f) =>
+    `<option value="${f.id}"${d.folder_id === f.id ? " selected" : ""}>${esc(f.name)}</option>`
+  )).join("");
+  const date = d.last_opened ? new Date(d.last_opened * 1000).toLocaleDateString() : "";
+  return `<div class="doc${d.exists ? "" : " gone"}">`
+    + `<div class="t" data-open="${d.id}" title="${esc(d.path)}">${esc(d.title || d.name)}</div>`
+    + `<div class="m">${esc(d.name)} · ${date} · ${d.highlights} 条划线`
+    + (d.exists ? "" : " · 文件已不在原位置") + `</div>`
+    + `<div class="tagsrow">${d.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}`
+    + `<button class="tagbtn" data-tags="${d.id}" title="编辑标签">＋标签</button></div>`
+    + `<div class="ops"><button data-open="${d.id}"${d.exists ? "" : " disabled"}>打开</button>`
+    + `<select data-move="${d.id}" title="移动到文件夹">${opts}</select>`
+    + `<button class="ghost" data-rm="${d.id}" title="从库中移除(不删磁盘文件)">移除</button>`
+    + `</div></div>`;
+}
+
+function renderLibrary() {
+  if (!LIB) return;
+  const q = libQuery.trim().toLowerCase();
+  $("#cntAll").textContent = LIB.documents.length;
+  $("#cntNone").textContent = LIB.documents.filter((d) => !d.folder_id).length;
+
+  $("#libFolders").innerHTML = LIB.folders.map((f) => {
+    const cnt = LIB.documents.filter((d) => d.folder_id === f.id).length;
+    return `<div class="libitem" data-folder="${f.id}">`
+      + `<span class="nm">${esc(f.name)}</span><span class="cnt">${cnt}</span>`
+      + `<button class="fx" data-frename="${f.id}" title="重命名">✎</button>`
+      + `<button class="fx" data-fdel="${f.id}" title="删除文件夹">×</button></div>`;
+  }).join("") || `<div class="libitem" style="color:var(--dim);cursor:default">`
+    + `<span class="nm">暂无文件夹</span></div>`;
+
+  $("#libTags").innerHTML = LIB.tags.map((t) =>
+    `<div class="libitem" data-tag="${esc(t.name)}">`
+    + `<span class="nm"># ${esc(t.name)}</span><span class="cnt">${t.count}</span></div>`
+  ).join("") || `<div class="libitem" style="color:var(--dim);cursor:default">`
+    + `<span class="nm">暂无标签</span></div>`;
+
+  document.querySelectorAll("#libSide .libitem").forEach((el) => {
+    const on = (el.dataset.scope && libScope.kind === el.dataset.scope)
+      || (el.dataset.folder && libScope.kind === "folder" && +el.dataset.folder === libScope.id)
+      || (el.dataset.tag && libScope.kind === "tag" && el.dataset.tag === libScope.name);
+    el.classList.toggle("on", !!on);
+  });
+
+  let docs = LIB.documents.slice();
+  if (libScope.kind === "none") docs = docs.filter((d) => !d.folder_id);
+  else if (libScope.kind === "folder") docs = docs.filter((d) => d.folder_id === libScope.id);
+  else if (libScope.kind === "tag") docs = docs.filter((d) => d.tags.includes(libScope.name));
+  if (q) docs = docs.filter((d) =>
+    (d.title + " " + d.name + " " + d.tags.join(" ")).toLowerCase().includes(q));
+  $("#libList").innerHTML = docs.map(docRow).join("")
+    || `<div class="empty">这里没有文档<br /><br /><span style="font-size:12px">`
+    + `点右上「导入文件」，或直接把 PDF / EPUB 拖进窗口</span></div>`;
+}
+
+const libPost = (url, body) => fetch(url, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+async function openLibDoc(id) {
+  const serial = ++fileSerial;
+  if (es) { es.close(); es = null; }
+  if (esP) { esP.close(); esP = null; }
+  running = false; polishing = false;
+  $("#btnRun").textContent = "开始翻译";
+  snapshotTab();
+  setBusyProg("正在打开文档 …", null);
+  try {
+    const r = await libPost("/api/library/open", { id });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (serial === fileSerial) await reload(await r.json());
+  } catch (e) {
+    if (serial === fileSerial) {
+      $("#runStatus").textContent = "打开失败：" + e;
+    }
+  }
+}
+
+/* 侧栏: 范围筛选 / 文件夹重命名与删除 */
+$("#libSide").addEventListener("click", (e) => {
+  const rn = e.target.closest("[data-frename]");
+  if (rn) { renameFolderInline(rn.closest(".libitem")); return; }
+  const del = e.target.closest("[data-fdel]");
+  if (del) { deleteFolder(+del.dataset.fdel); return; }
+  const folderEl = e.target.closest("[data-folder]");
+  if (folderEl) {
+    libScope = { kind: "folder", id: +folderEl.dataset.folder, name: "" };
+    renderLibrary(); return;
+  }
+  const tagEl = e.target.closest("[data-tag]");
+  if (tagEl) { libScope = { kind: "tag", id: 0, name: tagEl.dataset.tag }; renderLibrary(); return; }
+  const scopeEl = e.target.closest("[data-scope]");
+  if (scopeEl) { libScope = { kind: scopeEl.dataset.scope, id: 0, name: "" }; renderLibrary(); }
+});
+
+$("#btnNewFolder").onclick = () => {
+  const box = $("#libFolders");
+  if (box.querySelector("input")) return;
+  const div = document.createElement("div");
+  div.className = "libitem";
+  div.innerHTML = `<input placeholder="文件夹名称，回车确认" style="flex:1;font-size:12.5px" />`;
+  box.appendChild(div);
+  const inp = div.querySelector("input");
+  inp.focus();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const name = inp.value.trim();
+    div.remove();
+    if (!name) return;
+    const r = await libPost("/api/library/folders", { name });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      $("#runStatus").textContent = "新建文件夹失败：" + (d.detail || r.status);
+    }
+    loadLibrary();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter") inp.blur();
+    if (e.key === "Escape") { done = true; div.remove(); }
+  };
+  inp.onblur = commit;
+};
+
+function renameFolderInline(item) {
+  const id = +item.dataset.folder;
+  const f = (LIB.folders || []).find((x) => x.id === id);
+  if (!f || item.querySelector("input")) return;
+  const nm = item.querySelector(".nm");
+  const old = f.name;
+  nm.textContent = "";
+  const inp = document.createElement("input");
+  inp.value = old;
+  inp.style.cssText = "width:100%;font-size:12.5px;padding:2px 5px";
+  nm.appendChild(inp);
+  inp.focus();
+  inp.select();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const name = inp.value.trim();
+    if (name && name !== old) {
+      const r = await libPost("/api/library/folders/rename", { id, name });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        $("#runStatus").textContent = "重命名失败：" + (d.detail || r.status);
+      }
+    }
+    loadLibrary();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter") inp.blur();
+    if (e.key === "Escape") { done = true; loadLibrary(); }
+  };
+  inp.onblur = commit;
+  inp.onclick = (e) => e.stopPropagation();
+}
+
+async function deleteFolder(id) {
+  const f = (LIB.folders || []).find((x) => x.id === id);
+  if (!confirm(`删除文件夹「${f ? f.name : ""}」？\n其中文档会移回未分类，文档与划线保留。`)) return;
+  await libPost("/api/library/folders/delete", { id });
+  if (libScope.kind === "folder" && libScope.id === id) {
+    libScope = { kind: "all", id: 0, name: "" };
+  }
+  loadLibrary();
+}
+
+/* 文档列表: 打开 / 标签编辑 / 移除 / 移动文件夹 */
+$("#libList").addEventListener("click", async (e) => {
+  const tagBtn = e.target.closest("[data-tags]");
+  if (tagBtn) { editTagsInline(tagBtn); return; }
+  const rm = e.target.closest("[data-rm]");
+  if (rm) {
+    const id = +rm.dataset.rm;
+    const d = LIB.documents.find((x) => x.id === id);
+    if (!confirm(`从库中移除「${d ? (d.title || d.name) : ""}」？\n磁盘文件不会删除，该文档的划线记录会被清除。`)) return;
+    await libPost("/api/library/documents/remove", { id });
+    loadLibrary();
+    return;
+  }
+  const openBtn = e.target.closest("[data-open]");
+  if (openBtn && !openBtn.disabled) openLibDoc(+openBtn.dataset.open);
+});
+
+$("#libList").addEventListener("change", async (e) => {
+  const mv = e.target.closest("[data-move]");
+  if (!mv) return;
+  await libPost("/api/library/documents/move", {
+    id: +mv.dataset.move, folder_id: mv.value ? +mv.value : null,
+  });
+  loadLibrary();
+});
+
+function editTagsInline(btn) {
+  const id = +btn.dataset.tags;
+  const d = LIB.documents.find((x) => x.id === id);
+  if (!d) return;
+  const row = btn.closest(".tagsrow");
+  row.innerHTML = `<input class="tagedit" value="${esc(d.tags.join(", "))}"`
+    + ` placeholder="逗号分隔多个标签，回车保存" />`;
+  const inp = row.querySelector("input");
+  inp.focus();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const tags = inp.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    await libPost("/api/library/documents/tags", { id, tags });
+    loadLibrary();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter") inp.blur();
+    if (e.key === "Escape") { done = true; loadLibrary(); }
+  };
+  inp.onblur = commit;
+}
+
+$("#libSearch").addEventListener("input", (e) => {
+  libQuery = e.target.value;
+  renderLibrary();
+});
+$("#btnLib").onclick = () =>
+  document.body.classList.contains("lib") ? showReader() : showLibrary();
+$("#btnImport").onclick = () => openPicker();
+
+
+/* ---------------- 划线高亮 ---------------- */
+/* 坐标以 PDF 点存储, 前端按页面尺寸换算成百分比定位,
+   缩放 / 高清重取图都不会错位 */
+const marksByDoc = {};   // 运行时文档 id -> { 页码: [{id, rects, color}] }
+const wordsByDoc = {};   // 运行时文档 id -> { 页码: [[x0,y0,x1,y1,词,块,行]] }
+let drag = null;
+
+async function loadMarks() {
+  if (!INFO || !INFO.doc || !INFO.lib || INFO.fmt === "epub") return;
+  if (!marksByDoc[INFO.doc]) {
+    try {
+      const r = await fetch("/api/highlights?doc=" + INFO.doc);
+      if (!r.ok) return;
+      const d = await r.json();
+      const byPage = {};
+      for (const m of d.items) (byPage[m.page] = byPage[m.page] || []).push(m);
+      marksByDoc[INFO.doc] = byPage;
+    } catch (e) { return; }
+  }
+  renderAllMarks();
+}
+
+function renderAllMarks() {
+  if (!INFO || !INFO.doc) return;
+  for (const p of Object.keys(marksByDoc[INFO.doc] || {})) renderMarks(+p);
+}
+
+function renderMarks(page) {
+  const layer = document.querySelector("#L" + page + " .hlayer");
+  if (!layer || !INFO || !INFO.sizes) return;
+  layer.querySelectorAll(".hl").forEach((el) => el.remove());
+  const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+  for (const m of (marksByDoc[INFO.doc] || {})[page] || []) {
+    for (const r of m.rects) layer.appendChild(hlDiv(r, pw, ph, m.id, ""));
+  }
+}
+
+function hlDiv(r, pw, ph, id, cls) {
+  const el = document.createElement("div");
+  el.className = "hl" + cls;
+  if (id) el.dataset.hid = id;
+  el.style.left = (r[0] / pw * 100) + "%";
+  el.style.top = (r[1] / ph * 100) + "%";
+  el.style.width = ((r[2] - r[0]) / pw * 100) + "%";
+  el.style.height = ((r[3] - r[1]) / ph * 100) + "%";
+  return el;
+}
+
+async function ensureWords(page) {
+  const bag = (wordsByDoc[INFO.doc] = wordsByDoc[INFO.doc] || {});
+  if (bag[page]) return bag[page];
+  const r = await fetch(`/api/words/${page}?doc=` + INFO.doc);
+  if (!r.ok) throw new Error("词坐标读取失败");
+  const d = await r.json();
+  bag[page] = d.words;
+  return d.words;
+}
+
+/* 命中词: 优先包含点的词, 否则取距离最近的词(限制阈值, 防误触) */
+function hitWord(words, x, y) {
+  let best = -1, bestD = 1e9;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (x >= w[0] && x <= w[2] && y >= w[1] - 2 && y <= w[3] + 2) return i;
+    const cy = (w[1] + w[3]) / 2;
+    const dx = x < w[0] ? w[0] - x : (x > w[2] ? x - w[2] : 0);
+    const dist = Math.abs(y - cy) * 10 + dx;
+    if (dist < bestD) { bestD = dist; best = i; }
+  }
+  return bestD < 30 ? best : -1;
+}
+
+/* 起止词之间按 (块, 行) 分组合并成每行一个矩形 */
+function selectionRects(words, i, j) {
+  const lo = Math.min(i, j), hi = Math.max(i, j);
+  const lines = new Map();
+  const order = [];
+  for (let k = lo; k <= hi; k++) {
+    const w = words[k];
+    const key = w[5] * 4096 + w[6];
+    if (!lines.has(key)) {
+      lines.set(key, [w[0], w[1], w[2], w[3]]);
+      order.push(key);
+    } else {
+      const r = lines.get(key);
+      r[0] = Math.min(r[0], w[0]); r[1] = Math.min(r[1], w[1]);
+      r[2] = Math.max(r[2], w[2]); r[3] = Math.max(r[3], w[3]);
+    }
+  }
+  return order.map((k) => lines.get(k));
+}
+
+function pagePoint(wrap, page, e) {
+  const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+  const rect = wrap.getBoundingClientRect();
+  return {
+    x: Math.min(Math.max((e.clientX - rect.left) / (rect.width || 1) * pw, 0), pw),
+    y: Math.min(Math.max((e.clientY - rect.top) / (rect.height || 1) * ph, 0), ph),
+  };
+}
+
+/* 拖选后先弹「确认划线」浮动按钮(ReadPaper 式), 确认才入库;
+   点其他位置 / 开始新拖选 / 滚动都会取消待确认的预览 */
+let pendingMark = null;   // {page, rects, layer}
+
+function discardPending() {
+  if (pendingMark) {
+    pendingMark.layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
+    pendingMark = null;
+  }
+  $("#hlConfirm").style.display = "none";
+}
+
+function previewSelection() {
+  const { layer, words, start, cur, page } = drag;
+  layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
+  const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+  for (const r of selectionRects(words, start, cur)) {
+    layer.appendChild(hlDiv(r, pw, ph, 0, " preview"));
+  }
+}
+
+left.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || !INFO || !INFO.lib || INFO.fmt === "epub") return;
+  const wrap = e.target.closest(".imgwrap");
+  if (!wrap) return;
+  const pg = wrap.closest(".pg");
+  if (!pg) return;
+  const page = +pg.id.slice(1);
+  e.preventDefault();   // 阻止图片拖拽/默认选区
+  hideHlPop();
+  discardPending();
+  ensureWords(page).then((words) => {
+    const pt = pagePoint(wrap, page, e);
+    drag = { page, wrap, layer: wrap.querySelector(".hlayer"), words,
+             start: hitWord(words, pt.x, pt.y), cur: -1,
+             moved: false, sx: e.clientX, sy: e.clientY };
+    drag.cur = drag.start;
+  }).catch(() => {});
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!drag) return;
+  if (!(e.buttons & 1)) { drag = null; return; }  // 词表异步加载期间已松手
+  if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 4) {
+    drag.moved = true;
+  }
+  if (!drag.moved || drag.start < 0) return;
+  const pt = pagePoint(drag.wrap, drag.page, e);
+  const idx = hitWord(drag.words, pt.x, pt.y);
+  if (idx >= 0 && idx !== drag.cur) { drag.cur = idx; }
+  previewSelection();
+});
+
+document.addEventListener("mouseup", (e) => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  discardPending();
+  const valid = d.moved && d.start >= 0 && d.cur >= 0 && INFO && INFO.doc;
+  const rects = valid ? selectionRects(d.words, d.start, d.cur) : [];
+  if (!rects.length) {   // 单击或无效选区: 清掉预览, 不弹确认
+    d.layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
+    return;
+  }
+  // 保留预览, 等用户点浮动按钮确认
+  pendingMark = { page: d.page, rects, layer: d.layer };
+  const pop = $("#hlConfirm");
+  pop.style.display = "block";
+  pop.style.left = Math.min(e.clientX, window.innerWidth - 120) + "px";
+  pop.style.top = (e.clientY + 8) + "px";
+});
+
+$("#hlOk").onclick = async () => {
+  const p = pendingMark;
+  pendingMark = null;
+  $("#hlConfirm").style.display = "none";
+  if (!p || !INFO || !INFO.doc) return;
+  try {
+    const r = await libPost("/api/highlights", { doc: INFO.doc, page: p.page, rects: p.rects });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const m = await r.json();
+    const bag = (marksByDoc[INFO.doc] = marksByDoc[INFO.doc] || {});
+    (bag[p.page] = bag[p.page] || []).push(m);
+    renderMarks(p.page);   // 永久高亮取代预览
+  } catch (err) {
+    p.layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
+    $("#runStatus").textContent = "划线保存失败：" + err;
+  }
+};
+
+/* 点击已有划线 -> 删除浮层 */
+left.addEventListener("click", (e) => {
+  const hl = e.target.closest(".hl");
+  if (!hl || !hl.dataset.hid) return;
+  const pop = $("#hlPop");
+  pop.dataset.hid = hl.dataset.hid;
+  pop.style.display = "block";
+  pop.style.left = Math.min(e.clientX, window.innerWidth - 130) + "px";
+  pop.style.top = (e.clientY + 8) + "px";
+});
+
+function hideHlPop() { $("#hlPop").style.display = "none"; }
+
+$("#hlDel").onclick = async () => {
+  const id = +$("#hlPop").dataset.hid;
+  hideHlPop();
+  if (!INFO || !INFO.doc) return;
+  await libPost("/api/highlights/delete", { id });
+  const bag = marksByDoc[INFO.doc] || {};
+  for (const p of Object.keys(bag)) {
+    const before = bag[p].length;
+    bag[p] = bag[p].filter((m) => m.id !== id);
+    if (bag[p].length !== before) renderMarks(+p);
+  }
+};
+document.addEventListener("mousedown", (e) => {
+  if (!e.target.closest("#hlPop")) hideHlPop();
+  if (!e.target.closest("#hlConfirm")) discardPending();
+}, true);
+left.addEventListener("scroll", () => { hideHlPop(); discardPending(); },
+                      { passive: true });
+
+
+/* ---------------- 面板拖拽调宽 ---------------- */
+/* leftPct: 左栏占比(%), 0 表示默认均分; 上下布局时同一数值作用于高度 */
+function applySplit() {
+  const custom = prefs.leftPct
+    && (prefs.layout === "side" || prefs.layout === "stack");
+  if (custom) {
+    left.style.flex = `0 0 ${prefs.leftPct}%`;
+    right.style.flex = "1 1 0";
+    left.style.maxHeight = "none";   // 覆盖上下布局的 50% 限高
+  } else {
+    left.style.flex = "";
+    right.style.flex = "";
+    left.style.maxHeight = "";
+  }
+  $("#libView").style.width = (prefs.libW || 320) + "px";
+  $("#qaPanel").style.width = (prefs.qaW || 340) + "px";
+}
+
+function dragResize(splitter, onMove) {
+  splitter.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    splitter.classList.add("drag");
+    const move = (ev) => onMove(ev);
+    const up = () => {
+      splitter.classList.remove("drag");
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      savePrefs();
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+}
+
+dragResize($("#splitLR"), (e) => {
+  const r = document.querySelector("main").getBoundingClientRect();
+  const pct = prefs.layout === "stack"
+    ? (e.clientY - r.top) / r.height * 100
+    : (e.clientX - r.left) / r.width * 100;
+  prefs.leftPct = Math.round(Math.min(85, Math.max(15, pct)) * 10) / 10;
+  applySplit();
+});
+dragResize($("#splitLib"), (e) => {
+  prefs.libW = Math.round(Math.min(560, Math.max(220, e.clientX)));
+  applySplit();
+});
+dragResize($("#splitQA"), (e) => {
+  prefs.qaW = Math.round(Math.min(680, Math.max(260, window.innerWidth - e.clientX)));
+  applySplit();
+});
+
+/* ---------------- AI 问答 ---------------- */
+/* 每个标签页各自保存一份对话历史; 问答不走缓存, 每次都发送全文 */
+let qaHist = [];
+let qaBusy = false;
+
+function toggleQA() {
+  const on = !document.body.classList.contains("qa");
+  document.body.classList.toggle("qa", on);
+  $("#btnQA").classList.toggle("on", on);
+  prefs.qa = on;
+  savePrefs();
+  if (on) { renderQA(); $("#qaIn").focus(); }
+}
+
+/* 极简 Markdown 渲染(先转义再变换, 防注入):
+   支持 #/##/### 标题、**粗体**、*斜体*、`行内代码`、无序/有序列表 */
+function mdRender(src) {
+  const inline = (s) => esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/\*([^*]+)\*/g, "<i>$1</i>");
+  const out = [];
+  let list = null;
+  const closeList = () => {
+    if (list) { out.push(list === "ul" ? "</ul>" : "</ol>"); list = null; }
+  };
+  for (const raw of src.split("\n")) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { closeList(); continue; }
+    if ((m = line.match(/^###\s+(.*)/))) {
+      closeList(); out.push(`<div class="md-h4">${inline(m[1])}</div>`);
+    } else if ((m = line.match(/^#{1,2}\s+(.*)/))) {
+      closeList(); out.push(`<div class="md-h3">${inline(m[1])}</div>`);
+    } else if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
+      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+      out.push(`<li>${inline(m[1])}</li>`);
+    } else if ((m = line.match(/^\s*(\d+)[.、]\s+(.*)/))) {
+      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+      out.push(`<li>${inline(m[2])}</li>`);
+    } else {
+      closeList(); out.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join("");
+}
+
+function addQaBubble(role, text) {
+  const d = document.createElement("div");
+  d.className = "qmsg " + (role === "user" ? "user" : "bot");
+  if (role === "user") d.textContent = text;   // 用户输入纯文本
+  else d.innerHTML = mdRender(text);           // AI 回答按 Markdown 渲染
+  const list = $("#qaList");
+  list.appendChild(d);
+  list.scrollTop = list.scrollHeight;
+  return d;
+}
+
+function renderQA() {
+  const box = $("#qaList");
+  box.innerHTML = "";
+  for (const m of qaHist) addQaBubble(m.role, m.content);
+  $("#qaHint").textContent = (INFO && INFO.loaded)
+    ? `基于当前文档全文（约 ${(INFO.chars / 10000).toFixed(1)} 万字符），`
+      + `每次提问都会将正文发送给翻译服务，超长只保留首尾`
+    : "请先打开文档";
+}
+
+async function qaSend() {
+  if (qaBusy) return;
+  const inp = $("#qaIn");
+  const q = inp.value.trim();
+  if (!q) return;
+  if (!INFO || !INFO.loaded) {
+    $("#qaHint").textContent = "请先打开文档";
+    return;
+  }
+  qaBusy = true;
+  $("#qaSend").disabled = true;
+  inp.value = "";
+  addQaBubble("user", q);
+  qaHist.push({ role: "user", content: q });
+  const thinking = addQaBubble("assistant", "思考中…");
+  try {
+    const r = await libPost("/api/ask", {
+      doc: INFO.doc, question: q, history: qaHist.slice(0, -1),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    thinking.innerHTML = mdRender(d.answer);
+    qaHist.push({ role: "assistant", content: d.answer });
+  } catch (err) {
+    thinking.textContent = "出错了：" + err;
+    thinking.classList.add("err");
+    qaHist.pop();   // 失败的问题不留在历史里
+  }
+  const t = curTab();
+  if (t) t.qaHist = qaHist;
+  qaBusy = false;
+  $("#qaSend").disabled = false;
+  $("#qaList").scrollTop = $("#qaList").scrollHeight;
+}
+
+$("#btnQA").onclick = toggleQA;
+$("#qaSend").onclick = qaSend;
+$("#qaIn").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qaSend(); }
+});
+
+
 /* ---------------- 交互 ---------------- */
 $("#btnRun").onclick = run;
 $("#jumpTo").addEventListener("keydown", (e) => {
@@ -1066,6 +1929,17 @@ $("#btnSrc").onclick = () => {
   showSrc = !showSrc;
   right.querySelectorAll(".para").forEach((p) =>
     p.classList.toggle("show-src", showSrc));
+};
+/* 顶栏快捷开关: 一键隐藏/恢复译文栏, 记住之前的布局 */
+$("#btnPane").onclick = () => {
+  if (prefs.layout === "pdfonly") {
+    prefs.layout = prefs.layoutPrev === "pdfonly" ? "side" : (prefs.layoutPrev || "side");
+  } else {
+    prefs.layoutPrev = prefs.layout;
+    prefs.layout = "pdfonly";
+  }
+  savePrefs();
+  applyPrefs();
 };
 right.addEventListener("click", (e) => {
   const p = e.target.closest(".para");
@@ -1339,10 +2213,12 @@ window.addEventListener("drop", (e) => {
   if (f) uploadFile(f);
 });
 
+
 /* ---------------- 阅读偏好(存 localStorage) ---------------- */
 const PREF_KEY = "pdfread.prefs";
-let prefs = { theme: "dark", font: "15", layout: "side",
-              expFmt: "txt", expSrc: "dst", italicSrc: false };
+let prefs = { theme: "dark", font: "15", layout: "side", layoutPrev: "side",
+              expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
+              zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340 };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
@@ -1351,26 +2227,47 @@ function loadPrefs() {
 function savePrefs() {
   localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
 }
+const THEME_ORDER = ["dark", "light", "paper", "green"];
+const THEME_NAMES = { dark: "深色", light: "浅色", paper: "纸张", green: "护眼" };
+
 function applyPrefs() {
-  document.body.classList.toggle("light", prefs.theme === "light");
+  // paper / green 属于浅色体系: 复用 body.light 的组件适配, 只换配色变量
+  document.body.classList.toggle("light", prefs.theme !== "dark");
+  document.body.classList.toggle("theme-paper", prefs.theme === "paper");
+  document.body.classList.toggle("theme-green", prefs.theme === "green");
   document.body.classList.toggle("italic-src", !!prefs.italicSrc);
   document.documentElement.style.setProperty("--rfs", prefs.font + "px");
   const m = document.querySelector("main");
   m.classList.toggle("stacked", prefs.layout === "stack");
   m.classList.toggle("tronly", prefs.layout === "tronly");
+  m.classList.toggle("pdfonly", prefs.layout === "pdfonly");
+  const bp = $("#btnPane");
+  if (bp) {
+    bp.textContent = prefs.layout === "pdfonly" ? "译文栏: 关" : "译文栏: 开";
+    bp.classList.toggle("on", prefs.layout === "pdfonly");
+  }
   const tb = $("#btnTheme");
-  if (tb) tb.textContent = prefs.theme === "light" ? "浅色" : "深色";
+  if (tb) tb.textContent = THEME_NAMES[prefs.theme] || "深色";
   const ci = $("#cbItalic");
   if (ci) ci.checked = !!prefs.italicSrc;
   const fr = $("#fontRange");
   if (fr) fr.value = prefs.font;
   const fv = $("#fontVal");
   if (fv) fv.textContent = prefs.font;
+  const lw = $("#left");
+  if (lw) lw.style.setProperty("--zoom", prefs.zoom || 1);
+  const zv = $("#zoomVal");
+  if (zv) zv.textContent = Math.round((prefs.zoom || 1) * 100) + "%";
   syncSeg("segTheme", prefs.theme);
   syncSeg("segFont", prefs.font);
   syncSeg("segLayout", prefs.layout);
   syncSeg("segExpFmt", prefs.expFmt);
   syncSeg("segExpSrc", prefs.expSrc);
+  if (prefs.lib) showLibrary();
+  document.body.classList.toggle("qa", !!prefs.qa);
+  const bq = $("#btnQA");
+  if (bq) bq.classList.toggle("on", !!prefs.qa);
+  applySplit();
 }
 function syncSeg(id, v) {
   document.querySelectorAll("#" + id + " button").forEach((b) =>
@@ -1642,7 +2539,8 @@ $("#btnQuit").onclick = async () => {
 };
 
 $("#btnTheme").onclick = () => {
-  prefs.theme = prefs.theme === "light" ? "dark" : "light";
+  const i = THEME_ORDER.indexOf(prefs.theme);
+  prefs.theme = THEME_ORDER[(i + 1) % THEME_ORDER.length];
   savePrefs();
   applyPrefs();
 };
@@ -1662,6 +2560,29 @@ $("#cbItalic").onchange = (e) => {
   savePrefs();
   applyPrefs();
 };
+
+/* PDF 缩放(60%–250%): 放大后按新宽度重取高清图; 划线按百分比定位, 不错位 */
+/* 放大超出栏宽时 margin:auto 会失效(内容贴左溢出), 需要把横向滚动位置置中 */
+function centerLeft() {
+  if (left.scrollWidth > left.clientWidth) {
+    left.scrollLeft = (left.scrollWidth - left.clientWidth) / 2;
+  }
+}
+
+function setZoom(v) {
+  prefs.zoom = Math.min(2.5, Math.max(0.6, Math.round(v * 10) / 10));
+  savePrefs();
+  applyPrefs();
+  setTimeout(() => {
+    centerLeft();
+    if (leftObserver && INFO && INFO.fmt !== "epub") {
+      left.querySelectorAll(".pg img").forEach((i) => leftObserver.observe(i));
+    }
+  }, 60);
+}
+$("#zoomIn").onclick = () => setZoom((prefs.zoom || 1) + 0.1);
+$("#zoomOut").onclick = () => setZoom((prefs.zoom || 1) - 0.1);
+$("#zoomVal").onclick = () => setZoom(1);
 
 $("#btnExport").onclick = doExport;
 $("#btnExp").onclick = doExport;
