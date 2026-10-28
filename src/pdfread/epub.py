@@ -90,6 +90,7 @@ def inspect_epub(path: str, parse_options: dict | None = None) -> dict:
     before = Path(path).stat()
     pages: list[list[Para]] = []
     htmls: list[str] = []
+    toc: list[list] = []
 
     try:
         with zipfile.ZipFile(path) as zf:
@@ -129,6 +130,10 @@ def inspect_epub(path: str, parse_options: dict | None = None) -> dict:
                 if not paras:
                     continue  # 封面/空白章节不占页
 
+                # 章节首个标题作为目录项
+                head = next((p.text for p in paras if p.kind == "heading"), None)
+                if head:
+                    toc.append([1, head[:200], len(pages) + 1])
                 pages.append(paras)
                 htmls.append(_sanitize(body, base_dir))
     except (zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
@@ -145,6 +150,7 @@ def inspect_epub(path: str, parse_options: dict | None = None) -> dict:
         "pages": pages,
         "sizes": [(612, 792)] * len(pages),  # 占位, EPUB 无固定版面
         "title": title,
+        "toc": toc,
         "stamp": stamp,
         "paper_mode": False,
         "fmt": "epub",

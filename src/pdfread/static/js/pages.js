@@ -136,14 +136,9 @@ function finish() {
 }
 
 /* ---------------- 页码跳转 ---------------- */
-function jumpToPage() {
-  if (!INFO || !INFO.loaded) { openPicker(); return; }
-  const n = Number($("#jumpTo").value);
-  if (!Number.isInteger(n) || n < 1 || n > INFO.pages) {
-    $("#runStatus").textContent = `请输入 1–${INFO.pages} 之间的页码`;
-    return;
-  }
-  // 用几何坐标计算面板内偏移, 不受页眉/标签栏高度影响
+/* 用几何坐标计算面板内偏移, 不受页眉/标签栏高度影响;
+   silent 时不写状态栏(目录点击/进度恢复用) */
+function scrollToPage(n, silent) {
   const paneY = (pane, el) =>
     el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
   suppress.left = suppress.right = performance.now() + 400;
@@ -153,13 +148,55 @@ function jumpToPage() {
   const r = document.getElementById("R" + n);
   if (r) {
     right.scrollTop = paneY(right, r) - 6;
-    $("#runStatus").textContent = "";
-  } else {
+    if (!silent) $("#runStatus").textContent = "";
+  } else if (!silent) {
     $("#runStatus").textContent = `已跳到原文第 ${n} 页（该页译文尚未生成）`;
   }
+}
+
+function jumpToPage() {
+  if (!INFO || !INFO.loaded) { openPicker(); return; }
+  const n = Number($("#jumpTo").value);
+  if (!Number.isInteger(n) || n < 1 || n > INFO.pages) {
+    $("#runStatus").textContent = `请输入 1–${INFO.pages} 之间的页码`;
+    return;
+  }
+  scrollToPage(n);
   $("#jumpTo").value = "";
   $("#jumpTo").placeholder = n + " / " + INFO.pages;
 }
+
+/* ---------------- 目录大纲 ---------------- */
+function renderTOC() {
+  const box = $("#tocList");
+  const toc = (INFO && INFO.toc) || [];
+  box.innerHTML = toc.length
+    ? toc.map(([lvl, title, page]) =>
+        `<div class="tocitem" data-pg="${page}" title="第 ${page} 页"`
+        + ` style="padding-left:${(Math.min(Math.max(lvl, 1), 4) - 1) * 14 + 10}px"`
+        + `>${esc(title)}</div>`).join("")
+    : `<div class="tocitem" style="color:var(--dim);cursor:default">该文档没有目录</div>`;
+}
+
+$("#tocList").addEventListener("click", (e) => {
+  const it = e.target.closest("[data-pg]");
+  if (it && INFO && INFO.loaded) scrollToPage(+it.dataset.pg, true);
+});
+
+/* ---------------- 阅读进度记忆 ---------------- */
+let progTimer = null, lastProg = 0;
+left.addEventListener("scroll", () => {
+  if (!INFO || !INFO.lib) return;
+  clearTimeout(progTimer);
+  progTimer = setTimeout(() => {
+    const cur = topPage(left);
+    if (cur && cur.n !== lastProg) {
+      lastProg = cur.n;
+      libPost("/api/library/progress", { id: INFO.lib, page: cur.n })
+        .catch(() => {});
+    }
+  }, 1500);
+}, { passive: true });
 
 /* ---------------- 整体润色(第二遍) ---------------- */
 function togglePolish() {

@@ -181,6 +181,160 @@ def test_fulltext_truncates_middle():
     assert "[第1000页]" in text   # 尾部保留
 
 
+def test_library_open_reuses_loaded_document(client, make_pdf, monkeypatch):
+    """已打开的文档从文库再次打开时直接激活, 不重复解析(解析是主要耗时)。"""
+    doc = opened(client, make_pdf("reuse.pdf", "Reuse me."))
+    calls = []
+    orig = server._inspect
+
+    async def spy(*a, **kw):
+        calls.append(1)
+        return await orig(*a, **kw)
+
+    monkeypatch.setattr(server, "_inspect", spy)
+    r = client.post("/api/library/open", json={"id": doc["lib"]})
+    assert r.status_code == 200 and r.json()["doc"] == doc["doc"]
+    assert calls == []
+
+    # 关闭标签后再从文库打开, 需要重新解析
+    client.post("/api/docs/close", json={"id": doc["doc"]})
+    r = client.post("/api/library/open", json={"id": doc["lib"]})
+    assert r.status_code == 200 and calls == [1]
+
+
+def test_ask_stream_deltas(client, make_pdf, monkeypatch):
+    doc = opened(client, make_pdf("qs.pdf", "Streaming answer test."))
+
+    async def fake_stream(self, question, context, history):
+        assert "Streaming answer test" in context
+        yield "你好"
+        yield "，世界"
+
+    monkeypatch.setattr(server.Translator, "ask_stream", fake_stream)
+    r = client.post("/api/ask-stream",
+                    json={"doc": doc["doc"], "question": "打个招呼"})
+    assert r.status_code == 200
+    assert r.text.count("event: delta") == 2
+    assert "你好" in r.text and "，世界" in r.text
+    assert "event: done" in r.text
+
+    assert client.post("/api/ask-stream",
+                       json={"doc": doc["doc"], "question": "  "}
+                       ).status_code == 400
+
+
+def test_translate_text(client, make_pdf, monkeypatch):
+    doc = opened(client, make_pdf("tt.pdf", "Translate selection test."))
+
+    async def fake_translate(self, texts, lang):
+        return ["选区译文：" + t for t in texts]
+
+    monkeypatch.setattr(server.Translator, "translate", fake_translate)
+    r = client.post("/api/translate-text",
+                    json={"doc": doc["doc"], "text": "selected words"})
+    assert r.status_code == 200
+    assert r.json()["dst"] == "选区译文：selected words"
+
+    assert client.post("/api/translate-text",
+                       json={"doc": doc["doc"], "text": ""}).status_code == 400
+
+    async def fail_translate(self, texts, lang):
+        return ["[翻译失败] x"]
+    monkeypatch.setattr(server.Translator, "translate", fail_translate)
+    assert client.post("/api/translate-text",
+                       json={"doc": doc["doc"], "text": "abc"}).status_code == 502
+
+
+def test_words_follow_column_reading_order(client, tmp_path):
+    """双栏版面: 词按 栏->行->词 排序, 同一视觉行的两栏词不得交错。"""
+    import pymupdf
+    path = tmp_path / "twocol.pdf"
+    with pymupdf.open() as d:
+        page = d.new_page(width=612, height=792)
+        page.insert_textbox(pymupdf.Rect(50, 100, 280, 700),
+                            "Lone Ltwo Lthree " * 40, fontsize=11)
+        page.insert_textbox(pymupdf.Rect(320, 100, 560, 700),
+                            "Rone Rtwo Rthree " * 40, fontsize=11)
+        d.save(path)
+    doc = opened(client, path)
+    words = client.get("/api/words/1", params={"doc": doc["doc"]}).json()["words"]
+    texts = [w[4] for w in words]
+    assert texts and texts[0].startswith("L")
+    first_r = next(i for i, t in enumerate(texts) if t.startswith("R"))
+    assert all(t.startswith("L") for t in texts[:first_r])
+    assert all(t.startswith("R") for t in texts[first_r:])
+
+
+def test_toc_and_progress_roundtrip(client, tmp_path):
+    import pymupdf
+    path = tmp_path / "toc.pdf"
+    with pymupdf.open() as d:
+        d.new_page()
+        d.new_page()
+        d.set_toc([[1, "Intro", 1], [2, "Background", 2]])
+        d.save(path)
+    doc = opened(client, path)
+    assert doc["toc"] == [[1, "Intro", 1], [2, "Background", 2]]
+    assert doc["progress"] == 0
+
+    assert client.post("/api/library/progress",
+                       json={"id": doc["lib"], "page": 2}).status_code == 200
+    assert client.post("/api/library/progress",
+                       json={"id": doc["lib"], "page": -1}).status_code == 400
+    entry = client.get("/api/library").json()["documents"][0]
+    assert entry["progress"] == 2 and entry["pages"] == 2
+
+    # 关闭后从文库重开, 进度随 info 返回
+    client.post("/api/docs/close", json={"id": doc["doc"]})
+    again = client.post("/api/library/open", json={"id": doc["lib"]}).json()
+    assert again["progress"] == 2
+
+
+def test_epub_toc_from_chapter_headings(client, tmp_path):
+    from test_server import make_epub_file
+    doc = opened(client, make_epub_file(tmp_path / "book.epub"))
+    assert doc["fmt"] == "epub"
+    titles = [t[1] for t in doc["toc"]]
+    assert "Chapter One" in titles and "Chapter Two" in titles
+
+
+def test_summary_is_cached(client, make_pdf, monkeypatch):
+    doc = opened(client, make_pdf("sum.pdf", "We propose a method. It works."))
+    calls = []
+
+    async def fake_chat(self, client_, messages):
+        calls.append(messages)
+        return "## 一句话总结\n- 很好。"
+
+    monkeypatch.setattr(server.Translator, "_chat", fake_chat)
+    r1 = client.post("/api/summary", json={"doc": doc["doc"]})
+    assert r1.status_code == 200 and r1.json()["cached"] is False
+    r2 = client.post("/api/summary", json={"doc": doc["doc"]})
+    assert r2.json()["cached"] is True
+    assert len(calls) == 1
+
+
+def test_library_db_migration_adds_progress_columns(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "old.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY, path TEXT UNIQUE,"
+                 " name TEXT, title TEXT DEFAULT '', folder_id INTEGER,"
+                 " added REAL, last_opened REAL)")
+    conn.execute("INSERT INTO documents (path, name, added)"
+                 " VALUES ('/tmp/a.pdf', 'a.pdf', 1)")
+    conn.commit()
+    conn.close()
+
+    from pdfread.library import Library
+    lib = Library(db)
+    doc = lib.overview()["documents"][0]
+    assert doc["progress"] == 0 and doc["pages"] == 0
+    lib.set_progress(doc["id"], 3)
+    assert lib.get_progress(doc["id"]) == 3
+    lib.close()
+
+
 def test_library_persists_and_cleans_orphan_tags(tmp_path):
     from pdfread.library import Library
 

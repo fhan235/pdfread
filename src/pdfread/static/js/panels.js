@@ -133,15 +133,39 @@ async function qaSend() {
   inp.value = "";
   addQaBubble("user", q);
   qaHist.push({ role: "user", content: q });
-  const thinking = addQaBubble("assistant", "思考中…");
+  const thinking = addQaBubble("assistant", "…");
+  const list = $("#qaList");
   try {
-    const r = await libPost("/api/ask", {
+    // 流式(SSE over fetch): delta 事件逐块追加, 边收边渲染
+    const r = await libPost("/api/ask-stream", {
       doc: INFO.doc, question: q, history: qaHist.slice(0, -1),
     });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    const d = await r.json();
-    thinking.innerHTML = mdRender(d.answer);
-    qaHist.push({ role: "assistant", content: d.answer });
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", answer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        const di = block.indexOf("data: ");
+        if (di < 0) continue;
+        const data = JSON.parse(block.slice(di + 6));
+        if (block.startsWith("event: delta")) {
+          answer += data.text;
+          thinking.innerHTML = mdRender(answer);
+          list.scrollTop = list.scrollHeight;
+        } else if (block.startsWith("event: failure")) {
+          throw new Error(data.message || "请求失败");
+        }
+      }
+    }
+    if (!answer) throw new Error("空回答");
+    qaHist.push({ role: "assistant", content: answer });
   } catch (err) {
     thinking.textContent = "出错了：" + err;
     thinking.classList.add("err");
@@ -151,11 +175,43 @@ async function qaSend() {
   if (t) t.qaHist = qaHist;
   qaBusy = false;
   $("#qaSend").disabled = false;
-  $("#qaList").scrollTop = $("#qaList").scrollHeight;
+  list.scrollTop = list.scrollHeight;
 }
 
 $("#btnQA").onclick = toggleQA;
 $("#qaSend").onclick = qaSend;
+
+/* 速读摘要: 固定结构化 prompt, 结果服务端缓存 */
+async function qaSummary() {
+  if (qaBusy) return;
+  if (!INFO || !INFO.loaded) {
+    $("#qaHint").textContent = "请先打开文档";
+    return;
+  }
+  if (!document.body.classList.contains("qa")) toggleQA();
+  qaBusy = true;
+  $("#qaSend").disabled = true;
+  $("#btnSum").disabled = true;
+  addQaBubble("user", "生成速读摘要");
+  const thinking = addQaBubble("assistant", "正在速读全文…");
+  try {
+    const r = await libPost("/api/summary", { doc: INFO.doc });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    thinking.innerHTML = mdRender(d.answer);
+    qaHist.push({ role: "user", content: "生成速读摘要" },
+                { role: "assistant", content: d.answer });
+  } catch (err) {
+    thinking.textContent = "出错了：" + err;
+    thinking.classList.add("err");
+  }
+  const t = curTab();
+  if (t) t.qaHist = qaHist;
+  qaBusy = false;
+  $("#qaSend").disabled = false;
+  $("#btnSum").disabled = false;
+}
+$("#btnSum").onclick = qaSummary;
 $("#qaIn").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qaSend(); }
 });

@@ -2,7 +2,8 @@
 const PREF_KEY = "pdfread.prefs";
 let prefs = { theme: "dark", font: "15", layout: "side", layoutPrev: "side",
               expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
-              zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340 };
+              zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340,
+              toc: false };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
@@ -51,6 +52,9 @@ function applyPrefs() {
   document.body.classList.toggle("qa", !!prefs.qa);
   const bq = $("#btnQA");
   if (bq) bq.classList.toggle("on", !!prefs.qa);
+  document.body.classList.toggle("toc", !!prefs.toc);
+  const bt = $("#btnToc");
+  if (bt) bt.classList.toggle("on", !!prefs.toc);
   applySplit();
 }
 function syncSeg(id, v) {

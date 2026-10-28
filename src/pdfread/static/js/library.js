@@ -35,6 +35,7 @@ function docRow(d) {
   return `<div class="doc${d.exists ? "" : " gone"}">`
     + `<div class="t" data-open="${d.id}" title="${esc(d.path)}">${esc(d.title || d.name)}</div>`
     + `<div class="m">${esc(d.name)} · ${date} · ${d.highlights} 条划线`
+    + (d.progress > 0 && d.pages > 0 ? ` · 读到 ${d.progress}/${d.pages} 页` : "")
     + (d.exists ? "" : " · 文件已不在原位置") + `</div>`
     + `<div class="tagsrow">${d.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}`
     + `<button class="tagbtn" data-tags="${d.id}" title="编辑标签">＋标签</button></div>`
@@ -95,15 +96,27 @@ async function openLibDoc(id) {
   running = false; polishing = false;
   $("#btnRun").textContent = "开始翻译";
   snapshotTab();
-  setBusyProg("正在打开文档 …", null);
+  // 已打开的文档后端直接激活(不重新解析), 300ms 内完成则不显示 busy
+  const busyTimer = setTimeout(() => setBusyProg("正在打开文档 …", null), 300);
   try {
     const r = await libPost("/api/library/open", { id });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    if (serial === fileSerial) await reload(await r.json());
+    const data = await r.json();
+    if (serial !== fileSerial) return;
+    const existing = tabs.find((x) => x.id === data.doc);
+    if (existing && existing.leftHTML != null) {
+      existing.info = data;
+      if (data.doc === activeTab) restoreTab(existing);
+      else switchTab(data.doc);
+    } else {
+      await reload(data);
+    }
   } catch (e) {
     if (serial === fileSerial) {
       $("#runStatus").textContent = "打开失败：" + e;
     }
+  } finally {
+    clearTimeout(busyTimer);
   }
 }
 

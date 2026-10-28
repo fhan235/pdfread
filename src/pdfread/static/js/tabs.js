@@ -54,6 +54,10 @@ function restoreTab(t) {
   if (t.leftHTML == null) {
     // 新标签: 首次构建
     buildLeft();
+    // 恢复上次阅读进度(静默, 不写状态栏)
+    if (INFO.progress > 1) {
+      setTimeout(() => scrollToPage(INFO.progress, true), 150);
+    }
     if (!INFO.ready) {
       right.innerHTML = `<div class="empty">尚未配置翻译服务密钥<br /><br />`
         + `<span style="font-size:12px">正在打开设置面板…</span></div>`;
@@ -78,6 +82,8 @@ function restoreTab(t) {
   $("#btnPolish").textContent = t.view === "polished" ? "逐页" : "润色";
   qaHist = t.qaHist || [];
   renderQA();
+  renderTOC();
+  lastProg = (INFO && INFO.progress) || 0;
   $("#pStart").value = t.pStart ?? 1;
   $("#pEnd").value = t.pEnd ?? 0;
   suppress.left = suppress.right = 0;

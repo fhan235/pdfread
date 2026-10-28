@@ -41,6 +41,7 @@
   <button id="btnExp" class="ghost" title="导出当前视图内容">导出</button>
   <button id="btnSrc" class="ghost" title="显示/隐藏原文对照">原文</button>
   <button id="btnPane" class="ghost" title="只看 PDF / 恢复译文栏">译文栏: 开</button>
+  <button id="btnToc" class="ghost" title="目录大纲">目录</button>
   <button id="btnQA" class="ghost" title="基于当前文档的 AI 问答">AI 问答</button>
   <button id="btnSync" class="ghost">同步: 开</button>
   <button id="btnQuit" class="ghost quit" title="退出应用">退出</button>
@@ -87,6 +88,7 @@
 <div class="splitter" id="splitLib" title="拖拽调整文库宽度"></div>
 
 <main>
+  <aside id="tocPanel"><div id="tocList"></div></aside>
   <div class="pane" id="left"></div>
   <div class="splitter" id="splitLR" title="拖拽调整左右栏比例"></div>
   <div class="pane" id="right">
@@ -104,6 +106,9 @@
 <div class="splitter" id="splitQA" title="拖拽调整问答面板宽度"></div>
 <aside id="qaPanel">
   <div id="qaHint"></div>
+  <div class="qatools">
+    <button id="btnSum" class="ghost" title="生成全文的结构化速读摘要（缓存，重开免费）">✦ 速读摘要</button>
+  </div>
   <div id="qaList"></div>
   <div class="qabar">
     <textarea id="qaIn" rows="2"
@@ -115,7 +120,8 @@
 </div><!-- /#bodywrap -->
 
 <div id="hlPop"><button id="hlDel" class="ghost">删除划线</button></div>
-<div id="hlConfirm"><button id="hlOk">确认划线</button></div>
+<div id="hlConfirm"><button id="hlOk">划线</button><button id="hlTr" class="ghost">翻译</button></div>
+<div id="trPop"></div>
 
 <div id="picker">
   <div class="box">

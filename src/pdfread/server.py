@@ -148,7 +148,9 @@ def _register(path: Path, data: dict, name: str | None = None) -> dict:
     try:
         if STATE["library"] is not None:
             current["lib"] = STATE["library"].upsert_document(
-                str(path), current["name"], data.get("title") or "")
+                str(path), current["name"], data.get("title") or "",
+                pages=len(data["pages"]))
+            current["progress"] = STATE["library"].get_progress(current["lib"])
     except Exception:
         pass  # 文库登记失败不影响阅读
     STATE["docs"][current["id"]] = current
@@ -299,6 +301,8 @@ def info(doc: str = "") -> dict:
         "doc": current["id"],
         "title": current["title"],
         "lib": current.get("lib"),
+        "progress": current.get("progress", 0),
+        "toc": current.get("toc") or [],
         "paper_mode": bool(current.get("paper_mode")),
         "fmt": current.get("fmt", "pdf"),
         **base,
@@ -441,6 +445,17 @@ def library_remove_doc(payload: dict) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/library/progress")
+def library_progress(payload: dict) -> dict:
+    """记录阅读进度(当前页码)。"""
+    try:
+        _library().set_progress(int(payload.get("id", 0)),
+                                int(payload.get("page", 0)))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"ok": True}
+
+
 @app.post("/api/library/open")
 async def library_open(payload: dict) -> dict:
     """从文库打开文档。文库条目本身是用户授权的白名单,
@@ -452,6 +467,17 @@ async def library_open(payload: dict) -> dict:
     p = Path(raw).expanduser().resolve()
     if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub"):
         raise HTTPException(404, "文件已不在原位置，请重新导入")
+    # 已打开的文档直接激活, 不重复解析(整篇解析是打开的主要耗时)
+    for old in STATE["docs"].values():
+        if old["path"] == p:
+            STATE.update(pdf=p, doc=old, pages=old["pages"], sizes=old["sizes"])
+            try:
+                if STATE["library"] is not None:
+                    STATE["library"].upsert_document(
+                        str(p), old["name"], old.get("title") or "")
+            except Exception:
+                pass
+            return info(old["id"])
     if not _within_roots(p):
         parent = p.parent
         if parent.is_dir():
@@ -909,9 +935,8 @@ def _fulltext(current: dict, budget: int = QA_BUDGET) -> str:
             + full[-(budget - head):])
 
 
-@app.post("/api/ask")
-async def ask_doc(payload: dict) -> dict:
-    """基于当前文档全文的 AI 问答。每次提问都发送正文, 不走缓存。"""
+def _ask_args(payload: dict):
+    """问答类接口的公共入参校验: 文档 / 问题 / 历史(过滤 system 防注入)。"""
     current = _document(str(payload.get("doc", "")))
     question = str(payload.get("question", "")).strip()
     if not question or len(question) > 4000:
@@ -925,7 +950,13 @@ async def ask_doc(payload: dict) -> dict:
                 and isinstance(h.get("content"), str)
                 and len(h["content"]) <= 8000):
             clean.append({"role": h["role"], "content": h["content"]})
+    return current, question, clean
 
+
+@app.post("/api/ask")
+async def ask_doc(payload: dict) -> dict:
+    """基于当前文档全文的 AI 问答(非流式, 保留给简单调用方)。"""
+    current, question, clean = _ask_args(payload)
     cfg: TransConfig = replace(STATE["cfg"])
     try:
         tr = Translator(cfg, STATE["cache"])
@@ -936,6 +967,74 @@ async def ask_doc(payload: dict) -> dict:
     except RuntimeError as e:
         raise HTTPException(502, str(e)) from None
     return {"answer": answer}
+
+
+@app.post("/api/ask-stream")
+async def ask_stream(payload: dict) -> StreamingResponse:
+    """流式问答(SSE): delta 事件逐块推送, done/failure 收尾。"""
+    current, question, clean = _ask_args(payload)
+    cfg: TransConfig = replace(STATE["cfg"])
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+    async def gen():
+        try:
+            async for delta in tr.ask_stream(question, _fulltext(current), clean):
+                yield _sse("delta", {"text": delta})
+            yield _sse("done", {"ok": True})
+        except RuntimeError as e:
+            yield _sse("failure", {"message": str(e)})
+        except Exception:
+            yield _sse("failure", {"message": "问答请求中断，请重试"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/translate-text")
+async def translate_text(payload: dict) -> dict:
+    """划词翻译: 翻译一小段选中文字(走翻译缓存, 重复划不重复计费)。"""
+    _document(str(payload.get("doc", "")))
+    text = str(payload.get("text", "")).strip()
+    if not text or len(text) > 20000:
+        raise HTTPException(400, "文本为空或过长(上限 20000 字符)")
+    cfg: TransConfig = replace(STATE["cfg"])
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    values = await tr.translate([text], "zh")
+    dst = values[0] if values else ""
+    if dst.startswith("[翻译失败]"):
+        raise HTTPException(502, dst)
+    return {"dst": dst}
+
+
+@app.post("/api/summary")
+async def summary_doc(payload: dict) -> dict:
+    """速读摘要: 固定结构化提示词, 结果按(全文, 模型)缓存, 重开零成本。"""
+    current = _document(str(payload.get("doc", "")))
+    cfg: TransConfig = replace(STATE["cfg"])
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    text = _fulltext(current)
+    key = Cache.key(text, "summary\x00" + tr.cache_model, "zh")
+    hit = STATE["cache"].get_many([key]).get(key)
+    if hit:
+        return {"answer": hit, "cached": True}
+    try:
+        answer = await tr.summarize(text)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from None
+    STATE["cache"].put_many([(key, answer)])
+    return {"answer": answer, "cached": False}
 
 
 @app.get("/api/raw")

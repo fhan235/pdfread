@@ -37,9 +37,9 @@ FastAPI（127.0.0.1 本机）+ 单文件 HTML 前端的 PDF/EPUB 双栏对照翻
 
 ## HTTP API 速查（server.py）
 
-阅读：`GET /api/page/{n}.png` L717 · `GET /api/text/{n}` L738 · `GET /api/translate`(SSE) L746 · `GET /api/polish`(SSE) L822 · `POST /api/ask` L902 · `GET /api/raw` L931
+阅读：`GET /api/page/{n}.png` L717 · `GET /api/text/{n}` L738 · `GET /api/translate`(SSE) L746 · `GET /api/polish`(SSE) L822 · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw` L931
 文档管理：`GET /api/docs` L225 · `POST /api/docs/close` L238 · `POST /api/open` L501 · `POST /api/upload` L573 · `POST /api/open-url` L526 · `GET /api/browse` L312
-文库：`GET /api/library` L375 · folders L380-398 · documents move/tags/remove L404-427 · `POST /api/library/open` L434
+文库：`GET /api/library` L375 · folders L380-398 · documents move/tags/remove L404-427 · `POST /api/library/open` L434 · `POST /api/library/progress`
 划线：`GET /api/words/{n}` L454 · `GET/POST /api/highlights` L472/L480 · `POST /api/highlights/delete` L495
 其他：`GET/POST /api/settings` L612/L638 · parse-settings L665/L672 · `POST /api/shutdown` L940
 
@@ -48,10 +48,10 @@ FastAPI（127.0.0.1 本机）+ 单文件 HTML 前端的 PDF/EPUB 双栏对照翻
 | 数据 | 位置 | 结构 |
 |---|---|---|
 | 翻译/润色缓存 | `cache_dir()/translations.db` | 表 `t(k hash, v 文本)`，key 含模型+提示词版本 |
-| 文库/高亮 | `config_dir()/library.db` | 表 `folders` `documents` `tags` `document_tags` `highlights`（外键级联；高亮 rects 为 JSON 的 PDF 点坐标） |
+| 文库/高亮 | `config_dir()/library.db` | 表 `folders` `documents`(含 progress/pages 列, 旧库自动 ALTER 迁移) `tags` `document_tags` `highlights`（外键级联；高亮 rects 为 JSON 的 PDF 点坐标） |
 | 设置/密钥 | `config_dir()`（0600） | 环境变量优先于配置文件 |
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
-| 前端偏好 | localStorage `pdfread.prefs` | theme/font/layout/layoutPrev/zoom/lib/qa/leftPct/libW/qaW/expFmt/expSrc/italicSrc |
+| 前端偏好 | localStorage `pdfread.prefs` | theme/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/expFmt/expSrc/italicSrc |
 | 会话标签 | sessionStorage `pdfread.doc` | 当前标签 id |
 
 ## 前端地图（static/，无构建，多文件）
@@ -69,7 +69,7 @@ FastAPI（127.0.0.1 本机）+ 单文件 HTML 前端的 PDF/EPUB 双栏对照翻
 |---|---|---|
 | `js/state.js` | 全局状态与 `$` 简写 | `INFO`、`left/right`、`es/esP`、`fileSerial` |
 | `js/tabs.js` | 多文档标签 + 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`；`init()` |
-| `js/pages.js` | 左栏懒加载、翻译 SSE、润色、滚动同步 | `buildLeft()`（imgwrap+hlayer）；`run()`/`renderPage()`；`tidy`/`esc`；`centerLeft()` |
+| `js/pages.js` | 左栏懒加载、翻译 SSE、润色、滚动同步、目录、阅读进度 | `buildLeft()`（imgwrap+hlayer）；`run()`/`renderPage()`；`tidy`/`esc`；`centerLeft()`；`scrollToPage()`；`renderTOC()` |
 | `js/library.js` | 文库侧栏（文件夹/标签/搜索/移动/移除） | `LIB`/`libScope`；`renderLibrary()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending` |
 | `js/panels.js` | 分割条拖拽 + AI 问答 | `applySplit()`/`dragResize()`；`qaHist`/`mdRender()`（先转义）/`qaSend()` |

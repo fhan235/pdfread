@@ -90,6 +90,12 @@ function selectionRects(words, i, j) {
   return order.map((k) => lines.get(k));
 }
 
+/* 选区原文(按词拼接), 供划词翻译 */
+function selectionText(words, i, j) {
+  const lo = Math.min(i, j), hi = Math.max(i, j);
+  return words.slice(lo, hi + 1).map((w) => w[4]).join(" ").slice(0, 20000);
+}
+
 function pagePoint(wrap, page, e) {
   const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
   const rect = wrap.getBoundingClientRect();
@@ -164,10 +170,12 @@ document.addEventListener("mouseup", (e) => {
     return;
   }
   // 保留预览, 等用户点浮动按钮确认
-  pendingMark = { page: d.page, rects, layer: d.layer };
+  pendingMark = { page: d.page, rects, layer: d.layer,
+                  text: selectionText(d.words, d.start, d.cur),
+                  x: e.clientX, y: e.clientY };
   const pop = $("#hlConfirm");
-  pop.style.display = "block";
-  pop.style.left = Math.min(e.clientX, window.innerWidth - 120) + "px";
+  pop.style.display = "flex";   // 两按钮并排
+  pop.style.left = Math.min(e.clientX, window.innerWidth - 220) + "px";
   pop.style.top = (e.clientY + 8) + "px";
 });
 
@@ -202,6 +210,31 @@ left.addEventListener("click", (e) => {
 
 function hideHlPop() { $("#hlPop").style.display = "none"; }
 
+/* 划词翻译气泡 */
+function showTrPop(text, x, y) {
+  const pop = $("#trPop");
+  pop.textContent = text;
+  pop.style.display = "block";
+  pop.style.left = Math.max(8, Math.min(x, window.innerWidth - 380)) + "px";
+  pop.style.top = (y + 8) + "px";
+}
+function hideTrPop() { $("#trPop").style.display = "none"; }
+
+$("#hlTr").onclick = async () => {
+  const p = pendingMark;
+  if (!p || !p.text || !INFO || !INFO.doc) return;
+  $("#hlConfirm").style.display = "none";
+  showTrPop("翻译中…", p.x, p.y);
+  try {
+    const r = await libPost("/api/translate-text", { doc: INFO.doc, text: p.text });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    showTrPop(d.dst, p.x, p.y);
+  } catch (err) {
+    showTrPop("翻译失败：" + err, p.x, p.y);
+  }
+};
+
 $("#hlDel").onclick = async () => {
   const id = +$("#hlPop").dataset.hid;
   hideHlPop();
@@ -217,6 +250,7 @@ $("#hlDel").onclick = async () => {
 document.addEventListener("mousedown", (e) => {
   if (!e.target.closest("#hlPop")) hideHlPop();
   if (!e.target.closest("#hlConfirm")) discardPending();
+  if (!e.target.closest("#trPop")) hideTrPop();
 }, true);
 left.addEventListener("scroll", () => { hideHlPop(); discardPending(); },
                       { passive: true });

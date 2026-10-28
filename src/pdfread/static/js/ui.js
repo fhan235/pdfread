@@ -25,6 +25,12 @@ $("#btnPane").onclick = () => {
   savePrefs();
   applyPrefs();
 };
+/* 目录大纲面板开关 */
+$("#btnToc").onclick = () => {
+  prefs.toc = !prefs.toc;
+  savePrefs();
+  applyPrefs();
+};
 right.addEventListener("click", (e) => {
   const p = e.target.closest(".para");
   if (p) p.classList.toggle("show-src");

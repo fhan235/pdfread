@@ -63,6 +63,15 @@ class Library:
         self._conn.execute("PRAGMA foreign_keys = ON")
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # 旧库迁移: 补阅读进度/总页数列
+            for ddl in ("ALTER TABLE documents ADD COLUMN"
+                        " progress INTEGER NOT NULL DEFAULT 0",
+                        "ALTER TABLE documents ADD COLUMN"
+                        " pages INTEGER NOT NULL DEFAULT 0"):
+                try:
+                    self._conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # 列已存在
             self._conn.commit()
 
     def close(self) -> None:
@@ -111,7 +120,8 @@ class Library:
 
     # ---------- 文档 ----------
 
-    def upsert_document(self, path: str, name: str, title: str = "") -> int:
+    def upsert_document(self, path: str, name: str, title: str = "",
+                        pages: int = 0) -> int:
         """按绝对路径登记文档, 重复打开只刷新时间; 返回文库文档 id。"""
         now = time.time()
         with self._lock:
@@ -122,19 +132,37 @@ class Library:
                 doc_id = row[0]
                 self._conn.execute(
                     "UPDATE documents SET last_opened = ?,"
-                    " name = ?, title = CASE WHEN ? != '' THEN ? ELSE title END"
+                    " name = ?, title = CASE WHEN ? != '' THEN ? ELSE title END,"
+                    " pages = CASE WHEN ? > 0 THEN ? ELSE pages END"
                     " WHERE id = ?",
-                    (now, name, title, title, doc_id),
+                    (now, name, title, title, pages, pages, doc_id),
                 )
             else:
                 cur = self._conn.execute(
-                    "INSERT INTO documents (path, name, title, added, last_opened)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (path, name, title or "", now, now),
+                    "INSERT INTO documents (path, name, title, pages, added,"
+                    " last_opened) VALUES (?, ?, ?, ?, ?, ?)",
+                    (path, name, title or "", pages, now, now),
                 )
                 doc_id = cur.lastrowid
             self._conn.commit()
             return doc_id
+
+    def set_progress(self, doc_id: int, page: int) -> None:
+        """记录阅读进度(页码)。"""
+        if not isinstance(page, int) or page < 0 or page > 100000:
+            raise ValueError("进度页码无效")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE documents SET progress = ? WHERE id = ?",
+                (page, doc_id))
+            self._conn.commit()
+
+    def get_progress(self, doc_id: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT progress FROM documents WHERE id = ?", (doc_id,)
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def document_path(self, doc_id: int) -> tuple[str, str] | None:
         with self._lock:
@@ -273,7 +301,8 @@ class Library:
                     "SELECT d.id, d.path, d.name, d.title, d.folder_id,"
                     " d.added, d.last_opened,"
                     " (SELECT COUNT(*) FROM highlights h"
-                    "  WHERE h.document_id = d.id) AS hl"
+                    "  WHERE h.document_id = d.id) AS hl,"
+                    " d.progress, d.pages"
                     " FROM documents d ORDER BY d.last_opened DESC"):
                 tag_names = [t[0] for t in self._conn.execute(
                     "SELECT t.name FROM tags t"
@@ -283,6 +312,7 @@ class Library:
                     "id": r[0], "path": r[1], "name": r[2], "title": r[3],
                     "folder_id": r[4], "added": r[5], "last_opened": r[6],
                     "highlights": r[7], "tags": tag_names,
+                    "progress": r[8], "pages": r[9],
                     "exists": Path(r[1]).is_file(),
                 })
         return {"folders": folders, "tags": tags, "documents": docs}

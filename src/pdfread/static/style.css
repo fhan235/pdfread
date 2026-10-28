@@ -163,6 +163,17 @@
   main.tronly #splitLR, main.pdfonly #splitLR { display: none; }
   main.stacked #splitLR { cursor: row-resize; margin: -3px 0; }
 
+  /* ---------- 目录大纲面板 ---------- */
+  #tocPanel { display: none; width: 230px; flex: 0 0 auto; overflow-y: auto;
+              background: var(--panel); border-right: 1px solid var(--line);
+              padding: 10px 6px; }
+  body.toc #tocPanel { display: block; }
+  .tocitem { padding: 5px 10px; font-size: 12.5px; border-radius: 5px;
+             cursor: pointer; overflow: hidden; white-space: nowrap;
+             text-overflow: ellipsis; line-height: 1.5; }
+  .tocitem:hover { background: #ffffff10; color: var(--accent); }
+  body.light .tocitem:hover { background: #00000008; }
+
   /* ---------- 布局模式 ---------- */
   main.stacked { flex-direction: column; }
   main.stacked #left { border-right: 0; border-bottom: 1px solid var(--line);
@@ -429,6 +440,9 @@
   body.qa #qaPanel { display: flex; }
   #qaHint { padding: 8px 12px; font-size: 11px; color: var(--dim);
             border-bottom: 1px solid var(--line); }
+  .qatools { padding: 7px 12px; border-bottom: 1px solid var(--line);
+             display: flex; gap: 8px; }
+  .qatools button { font-size: 12px; padding: 3px 10px; }
   #qaList { flex: 1; overflow-y: auto; padding: 12px; }
   .qmsg { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px;
           font-size: 13px; line-height: 1.7; word-break: break-word; }
@@ -467,3 +481,10 @@
            border-radius: 8px; padding: 6px;
            box-shadow: 0 8px 24px #00000080; }
   #hlPop button, #hlConfirm button { font-size: 12px; padding: 4px 12px; }
+  #hlConfirm { gap: 6px; }
+  /* 划词翻译气泡 */
+  #trPop { display: none; position: fixed; z-index: 70; max-width: 360px;
+           background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; padding: 10px 13px; font-size: 13px;
+           line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+           box-shadow: 0 8px 24px #00000080; }

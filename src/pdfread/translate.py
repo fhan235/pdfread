@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import sqlite3
 import threading
@@ -80,6 +81,17 @@ QA_PROMPT = (
     "1. 只依据给定文档内容回答; 文档没有依据的问题, 明确说明「文档中未提及」, 不要编造。\n"
     "2. 用简体中文回答, 简洁准确; 需要引用时给出英文原文片段。\n"
     "3. 可以适当分点, 但不要复述问题, 不要输出与问题无关的文档总结。"
+)
+
+SUMMARY_PROMPT = (
+    "你是文献速读助手。根据用户给出的文档正文(超长时可能只保留首尾), "
+    "输出结构化速读摘要, 用简体中文 Markdown, 严格按以下小节组织:\n"
+    "## 一句话总结\n## 研究问题 / 主题\n## 方法与思路\n"
+    "## 关键结果 / 要点\n## 结论与局限\n"
+    "规则:\n"
+    "1. 只依据文档内容; 文档未体现的小节写「文档未明确」, 不要编造。\n"
+    "2. 每节 1-4 条要点, 用列表; 总长度 500 字以内。\n"
+    "3. 不要复述本提示, 不要输出小节之外的内容。"
 )
 
 _SEG = re.compile(r"<<<(\d+)>>>")
@@ -233,6 +245,54 @@ class Translator:
         messages.append({"role": "user", "content": question})
         async with httpx.AsyncClient() as client:
             return await self._chat(client, messages)
+
+    async def summarize(self, context: str) -> str:
+        """速读摘要: 固定结构化提示词, 全文直塞(调用方负责截断)。"""
+        async with httpx.AsyncClient() as client:
+            return await self._chat(client, [
+                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "user", "content": "文档正文如下:\n\n" + context},
+            ])
+
+    async def ask_stream(self, question: str, context: str,
+                         history: list[dict]):
+        """问答流式版: 逐块产出文本增量(OpenAI SSE)。"""
+        messages = [
+            {"role": "system", "content": QA_PROMPT},
+            {"role": "user", "content": "文档正文如下:\n\n" + context},
+        ]
+        messages.extend(history)
+        messages.append({"role": "user", "content": question})
+        body = {"model": self.model, "messages": messages,
+                "temperature": 0.2, "stream": True}
+        headers = {"Content-Type": "application/json"}
+        if self._key and self._key != "local":
+            headers["Authorization"] = f"Bearer {self._key}"
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                    "POST", f"{self.base_url}/chat/completions",
+                    json=body, headers=headers,
+                    timeout=self.cfg.timeout) as r:
+                if r.status_code != 200:
+                    # 不读响应正文, 避免把可能的密钥回显带到界面
+                    raise RuntimeError(
+                        f"翻译服务返回 HTTP {r.status_code}，请检查密钥、模型和地址")
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content")
+                    if delta:
+                        yield delta
 
     async def _chat(self, client: httpx.AsyncClient,
                     messages: list[dict]) -> str:
