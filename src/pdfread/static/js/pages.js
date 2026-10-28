@@ -1,13 +1,6 @@
-/* ------------- 左栏：懒加载页面位图 ------------- */
-// 按实际显示宽度与设备像素比计算所需 DPI, 高分屏不再模糊
-function targetDpi(img, pageIdx) {
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = img.clientWidth || left.clientWidth || 600;
-  const [pw] = INFO.sizes[pageIdx - 1] || [612];
-  // 物理像素宽 / PDF 逻辑宽(1/72 英寸) = 所需 DPI
-  const dpi = Math.round((cssW * dpr * 72) / pw);
-  return Math.min(300, Math.max(120, dpi));
-}
+/* ------------- 左栏：懒加载页面矢量图 ------------- */
+/* 页面以 SVG 矢量渲染(文字转路径), 任意缩放/分屏都清晰,
+   不再需要按宽度计算 DPI 或布局变化后重取 */
 
 function buildLeft() {
   left.innerHTML = "";
@@ -54,28 +47,14 @@ function attachLeftObserver() {
           .catch(() => { el.innerHTML = `<span class="loading">章节加载失败</span>`; });
         return;
       }
-      if (el.src && el.dataset.dpi >= targetDpi(el, p) - 30) return;
-      const dpi = targetDpi(el, p);
-      el.dataset.dpi = dpi;
-      el.src = `/api/page/${p}.png?dpi=${dpi}&doc=${documentId}`;
+      if (el.src) return;   // SVG 与缩放无关, 加载一次即可
+      el.src = `/api/page/${p}.svg?doc=${documentId}`;
       io.unobserve(el);
     });
   }, { rootMargin: "700px" });
   leftObserver = io;
   left.querySelectorAll(epub ? ".echapter" : "img").forEach((i) => io.observe(i));
 }
-
-// 窗口明显变宽时(如全屏/分屏调整)按新宽度重取高清图(只绑定一次)
-let lastW = 0, rszTimer = null;
-window.addEventListener("resize", () => {
-  clearTimeout(rszTimer);
-  rszTimer = setTimeout(() => {
-    if (!leftObserver || !INFO || INFO.fmt === "epub") return;
-    if (lastW && Math.abs(left.clientWidth - lastW) < lastW * 0.25) return;
-    lastW = left.clientWidth;
-    left.querySelectorAll(".pg img").forEach((i) => leftObserver.observe(i));
-  }, 300);
-}, { passive: true });
 
 /* ---------------- 翻译（SSE 流式） ---------------- */
 function run() {

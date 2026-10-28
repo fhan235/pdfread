@@ -34,7 +34,7 @@ from fastapi.responses import (
 )
 
 from .library import Library
-from .pdfworker import inspect_pdf, page_words, render_page
+from .pdfworker import inspect_pdf, page_words, render_page, render_page_svg
 from .paths import config_dir, static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
@@ -750,6 +750,28 @@ async def epub_resource(num: int, path: str = Query(...), doc: str = "") -> Resp
                     headers={"Cache-Control": "private, max-age=3600"})
 
 
+@app.get("/api/page/{num}.svg")
+async def page_svg(num: int, doc: str = "") -> Response:
+    """矢量页面(默认渲染方式): 文字转路径, 缩放不失真, 无需 DPI 计算。"""
+    current = _document(doc)
+    if current.get("fmt") == "epub":
+        raise HTTPException(400, "EPUB 无页面图，请使用章节接口")
+    if not (1 <= num <= len(current["pages"])):
+        raise HTTPException(404, "页码超出范围")
+    try:
+        svg = await asyncio.get_running_loop().run_in_executor(
+            _executor(), render_page_svg, str(current["path"]), num,
+            current["stamp"])
+    except Exception:
+        await _restart_executor()
+        raise HTTPException(409, "PDF 已变更或无法渲染，请重新打开") from None
+    return Response(
+        svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "private, max-age=3600" if doc else "no-store"},
+    )
+
+
 @app.get("/api/page/{num}.png")
 async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
     current = _document(doc)
@@ -757,7 +779,7 @@ async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
         raise HTTPException(400, "EPUB 无页面图片，请使用章节接口")
     if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
-    dpi = max(60, min(dpi, 300))
+    dpi = max(60, min(dpi, 450))
     try:
         png = await asyncio.get_running_loop().run_in_executor(
             _executor(), render_page, str(current["path"]), num, dpi, current["stamp"])

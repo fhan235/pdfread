@@ -37,7 +37,7 @@ FastAPI（127.0.0.1 本机）+ 单文件 HTML 前端的 PDF/EPUB 双栏对照翻
 
 ## HTTP API 速查（server.py）
 
-阅读：`GET /api/page/{n}.png` L717 · `GET /api/text/{n}` L738 · `GET /api/translate`(SSE) L746 · `GET /api/polish`(SSE) L822 · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw` L931
+阅读：`GET /api/page/{n}.svg`(默认) · `GET /api/page/{n}.png` L717 · `GET /api/text/{n}` L738 · `GET /api/translate`(SSE) L746 · `GET /api/polish`(SSE) L822 · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw` L931
 文档管理：`GET /api/docs` L225 · `POST /api/docs/close` L238 · `POST /api/open` L501 · `POST /api/upload` L573 · `POST /api/open-url` L526 · `GET /api/browse` L312
 文库：`GET /api/library` L375 · folders L380-398 · documents move/tags/remove L404-427 · `POST /api/library/open` L434 · `POST /api/library/progress`
 划线：`GET /api/words/{n}` L454 · `GET/POST /api/highlights` L472/L480 · `POST /api/highlights/delete` L495
@@ -81,7 +81,7 @@ FastAPI（127.0.0.1 本机）+ 单文件 HTML 前端的 PDF/EPUB 双栏对照翻
 
 ## 核心机制备忘
 
-- **PDF 渲染**：页面→PNG（DPI 按显示宽度×devicePixelRatio 自适应，60–300）。左栏是图片，不是文本。
+- **PDF 渲染**：页面→SVG 矢量图（`text_as_path`，任意缩放不失真）；`/api/page/{n}.png` 保留作回退。左栏是图，不是文本。
 - **划线坐标**：以 PDF 点存入 SQLite，前端按 `INFO.sizes` 换算成 % 定位 → 缩放/换 DPI 不错位。EPUB 不支持划线。
 - **划词吸附**：`page_words()` 给词坐标，前端拖选按词吸附，按 (块,行) 合并成每行矩形。
 - **标签页**：切换=快照 innerHTML+滚动位置；翻译流切换即停（缓存在服务端，重翻秒出）。

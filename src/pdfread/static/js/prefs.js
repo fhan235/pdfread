@@ -361,12 +361,7 @@ function setZoom(v) {
   prefs.zoom = Math.min(2.5, Math.max(0.6, Math.round(v * 10) / 10));
   savePrefs();
   applyPrefs();
-  setTimeout(() => {
-    centerLeft();
-    if (leftObserver && INFO && INFO.fmt !== "epub") {
-      left.querySelectorAll(".pg img").forEach((i) => leftObserver.observe(i));
-    }
-  }, 60);
+  setTimeout(() => centerLeft(), 60);   // SVG 矢量图无需重取, 只需居中
 }
 $("#zoomIn").onclick = () => setZoom((prefs.zoom || 1) + 0.1);
 $("#zoomOut").onclick = () => setZoom((prefs.zoom || 1) - 0.1);

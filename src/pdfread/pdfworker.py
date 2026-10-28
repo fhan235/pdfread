@@ -39,6 +39,15 @@ def render_page(path: str, num: int, dpi: int, stamp: tuple) -> bytes:
         return doc[num - 1].get_pixmap(dpi=dpi).tobytes("png")
 
 
+def render_page_svg(path: str, num: int, stamp: tuple) -> bytes:
+    """矢量页面(SVG, 文字转路径): 任意缩放都清晰, 且与缩放/DPI 无关。"""
+    st = Path(path).stat()
+    if (st.st_mtime_ns, st.st_size) != stamp:
+        raise ValueError("PDF 已被修改，请重新打开")
+    with pymupdf.open(path) as doc:
+        return doc[num - 1].get_svg_image(text_as_path=True).encode("utf-8")
+
+
 def page_words(path: str, num: int, stamp: tuple) -> list[list]:
     """一页的全部词坐标(PDF 点), 供前端划线吸附。
 
