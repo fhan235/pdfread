@@ -33,3 +33,17 @@ def render_page(path: str, num: int, dpi: int, stamp: tuple) -> bytes:
         raise ValueError("PDF 已被修改，请重新打开")
     with pymupdf.open(path) as doc:
         return doc[num - 1].get_pixmap(dpi=dpi).tobytes("png")
+
+
+def page_words(path: str, num: int, stamp: tuple) -> list[list]:
+    """一页的全部词坐标(PDF 点), 供前端划线吸附。
+
+    返回 [x0, y0, x1, y1, word, block, line] 精简行, 按阅读顺序排序。
+    """
+    st = Path(path).stat()
+    if (st.st_mtime_ns, st.st_size) != stamp:
+        raise ValueError("PDF 已被修改，请重新打开")
+    with pymupdf.open(path) as doc:
+        words = doc[num - 1].get_text("words", sort=True)
+    return [[round(w[0], 2), round(w[1], 2), round(w[2], 2), round(w[3], 2),
+             w[4], w[5], w[6]] for w in words]

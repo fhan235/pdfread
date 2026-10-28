@@ -73,6 +73,15 @@ POLISH_PROMPT = (
     "6. 保留数字、单位、专有名词缩写与公式原样。"
 )
 
+QA_PROMPT = (
+    "你是专业的文献阅读助手。用户会给你一篇文档的正文(超长时可能只保留首尾), "
+    "并基于它提问。\n"
+    "规则:\n"
+    "1. 只依据给定文档内容回答; 文档没有依据的问题, 明确说明「文档中未提及」, 不要编造。\n"
+    "2. 用简体中文回答, 简洁准确; 需要引用时给出英文原文片段。\n"
+    "3. 可以适当分点, 但不要复述问题, 不要输出与问题无关的文档总结。"
+)
+
 _SEG = re.compile(r"<<<(\d+)>>>")
 
 
@@ -208,12 +217,28 @@ class Translator:
 
     async def _call(self, client: httpx.AsyncClient, payload: str,
                     prompt: str = SYSTEM_PROMPT) -> str:
+        return await self._chat(client, [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": payload},
+        ])
+
+    async def ask(self, question: str, context: str,
+                  history: list[dict]) -> str:
+        """基于文档正文的问答(方案 A: 全文直塞, 调用方负责截断)。"""
+        messages = [
+            {"role": "system", "content": QA_PROMPT},
+            {"role": "user", "content": "文档正文如下:\n\n" + context},
+        ]
+        messages.extend(history)
+        messages.append({"role": "user", "content": question})
+        async with httpx.AsyncClient() as client:
+            return await self._chat(client, messages)
+
+    async def _chat(self, client: httpx.AsyncClient,
+                    messages: list[dict]) -> str:
         body = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": payload},
-            ],
+            "messages": messages,
             "temperature": 0.2,
             "stream": False,
         }

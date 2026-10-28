@@ -33,8 +33,9 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
-from .pdfworker import inspect_pdf, render_page
-from .paths import static_dir, uploads_dir
+from .library import Library
+from .pdfworker import inspect_pdf, page_words, render_page
+from .paths import config_dir, static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
 MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
@@ -65,6 +66,9 @@ async def lifespan(app):
     if STATE["cache"] is not None:
         STATE["cache"].close()
         STATE["cache"] = None
+    if STATE["library"] is not None:
+        STATE["library"].close()
+        STATE["library"] = None
 
 
 app = FastAPI(title="PDF Bilingual Reader", lifespan=lifespan)
@@ -88,6 +92,7 @@ STATE: dict = {
     "roots": [],
     "cfg": None,
     "cache": None,
+    "library": None,
     "docs": {},
 }
 
@@ -140,6 +145,12 @@ def _register(path: Path, data: dict, name: str | None = None) -> dict:
             break
     current = {**data, "path": path, "name": name or path.name,
                "id": doc_id or uuid4().hex}
+    try:
+        if STATE["library"] is not None:
+            current["lib"] = STATE["library"].upsert_document(
+                str(path), current["name"], data.get("title") or "")
+    except Exception:
+        pass  # 文库登记失败不影响阅读
     STATE["docs"][current["id"]] = current
     while len(STATE["docs"]) > 16:
         STATE["docs"].pop(next(iter(STATE["docs"])))
@@ -277,6 +288,7 @@ def info(doc: str = "") -> dict:
         "ver": current["id"],
         "doc": current["id"],
         "title": current["title"],
+        "lib": current.get("lib"),
         "paper_mode": bool(current.get("paper_mode")),
         "fmt": current.get("fmt", "pdf"),
         **base,
@@ -348,6 +360,141 @@ async def get_history_api() -> list[dict]:
 async def remove_history_api(payload: dict) -> dict:
     from .settings import remove_history
     remove_history(str(payload.get("path", "")))
+    return {"ok": True}
+
+
+# ---------- 文库(文件夹 / 标签 / 高亮) ----------
+
+def _library() -> Library:
+    lib = STATE.get("library")
+    if lib is None:
+        raise HTTPException(500, "文库未初始化")
+    return lib
+
+
+@app.get("/api/library")
+def library_overview() -> dict:
+    return _library().overview()
+
+
+@app.post("/api/library/folders")
+def library_add_folder(payload: dict) -> dict:
+    try:
+        return _library().add_folder(str(payload.get("name", "")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/library/folders/rename")
+def library_rename_folder(payload: dict) -> dict:
+    try:
+        _library().rename_folder(int(payload.get("id", 0)),
+                                 str(payload.get("name", "")))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"ok": True}
+
+
+@app.post("/api/library/folders/delete")
+def library_delete_folder(payload: dict) -> dict:
+    _library().delete_folder(int(payload.get("id", 0)))
+    return {"ok": True}
+
+
+@app.post("/api/library/documents/move")
+def library_move_doc(payload: dict) -> dict:
+    folder = payload.get("folder_id")
+    try:
+        _library().move_document(int(payload.get("id", 0)),
+                                 int(folder) if folder else None)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"ok": True}
+
+
+@app.post("/api/library/documents/tags")
+def library_set_tags(payload: dict) -> dict:
+    tags = payload.get("tags")
+    if not isinstance(tags, list):
+        raise HTTPException(400, "tags 必须是数组")
+    try:
+        _library().set_tags(int(payload.get("id", 0)), tags)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"ok": True}
+
+
+@app.post("/api/library/documents/remove")
+def library_remove_doc(payload: dict) -> dict:
+    """从文库移除条目(不删除磁盘文件, 不影响已打开的标签)。"""
+    _library().remove_document(int(payload.get("id", 0)))
+    return {"ok": True}
+
+
+@app.post("/api/library/open")
+async def library_open(payload: dict) -> dict:
+    """从文库打开文档。文库条目本身是用户授权的白名单,
+    仍校验文件存在与扩展名, 防数据库被篡改后读取任意文件。"""
+    entry = _library().document_path(int(payload.get("id", 0)))
+    if entry is None:
+        raise HTTPException(404, "文档不在文库中")
+    raw, name = entry
+    p = Path(raw).expanduser().resolve()
+    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub"):
+        raise HTTPException(404, "文件已不在原位置，请重新导入")
+    if not _within_roots(p):
+        parent = p.parent
+        if parent.is_dir():
+            STATE["roots"].append(parent)
+    data = await _inspect(p, True)
+    current = _register(p, data, name)
+    return info(current["id"])
+
+
+@app.get("/api/words/{num}")
+async def words(num: int, doc: str = "") -> dict:
+    """一页的词坐标, 供划线吸附(仅 PDF)。"""
+    current = _document(doc)
+    if current.get("fmt") == "epub":
+        raise HTTPException(400, "EPUB 暂不支持划线")
+    if not (1 <= num <= len(current["pages"])):
+        raise HTTPException(404, "页码超出范围")
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            _executor(), page_words, str(current["path"]), num,
+            current["stamp"])
+    except Exception:
+        await _restart_executor()
+        raise HTTPException(409, "PDF 已变更或无法读取，请重新打开") from None
+    return {"page": num, "words": result}
+
+
+@app.get("/api/highlights")
+def list_marks(doc: str = "") -> dict:
+    current = _document(doc)
+    if not current.get("lib"):
+        return {"items": []}
+    return {"items": _library().list_highlights(current["lib"])}
+
+
+@app.post("/api/highlights")
+def add_mark(payload: dict) -> dict:
+    current = _document(str(payload.get("doc", "")))
+    if not current.get("lib"):
+        raise HTTPException(400, "该文档未登记到文库")
+    if not (1 <= int(payload.get("page", 0)) <= len(current["pages"])):
+        raise HTTPException(400, "页码超出范围")
+    try:
+        return _library().add_highlight(
+            current["lib"], int(payload.get("page", 0)),
+            payload.get("rects"), str(payload.get("color", "yellow")))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/highlights/delete")
+def delete_mark(payload: dict) -> dict:
+    _library().delete_highlight(int(payload.get("id", 0)))
     return {"ok": True}
 
 
@@ -734,6 +881,53 @@ async def polish_stream(doc: str = "", lang: str = "zh") -> StreamingResponse:
     )
 
 
+QA_BUDGET = 60000  # 问答正文字符预算: 超出保留首 70% + 尾 30%
+
+
+def _fulltext(current: dict, budget: int = QA_BUDGET) -> str:
+    """拼接全文正文(带页码标记), 超预算时掐中段留首尾。"""
+    parts = []
+    for n, page in enumerate(current["pages"], 1):
+        text = "\n".join(p.text for p in page if p.text.strip())
+        if text:
+            parts.append(f"[第{n}页]\n{text}")
+    full = "\n\n".join(parts)
+    if len(full) <= budget:
+        return full
+    head = int(budget * 0.7)
+    return (full[:head] + "\n\n[……中间部分因长度限制省略……]\n\n"
+            + full[-(budget - head):])
+
+
+@app.post("/api/ask")
+async def ask_doc(payload: dict) -> dict:
+    """基于当前文档全文的 AI 问答。每次提问都发送正文, 不走缓存。"""
+    current = _document(str(payload.get("doc", "")))
+    question = str(payload.get("question", "")).strip()
+    if not question or len(question) > 4000:
+        raise HTTPException(400, "问题为空或过长(上限 4000 字符)")
+    history = payload.get("history") or []
+    if not isinstance(history, list) or len(history) > 20:
+        raise HTTPException(400, "对话历史格式无效")
+    clean = []
+    for h in history:
+        if (isinstance(h, dict) and h.get("role") in ("user", "assistant")
+                and isinstance(h.get("content"), str)
+                and len(h["content"]) <= 8000):
+            clean.append({"role": h["role"], "content": h["content"]})
+
+    cfg: TransConfig = replace(STATE["cfg"])
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    try:
+        answer = await tr.ask(question, _fulltext(current), clean)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from None
+    return {"answer": answer}
+
+
 @app.get("/api/raw")
 async def raw_pdf(doc: str = "") -> FileResponse:
     current = _document(doc)
@@ -777,6 +971,9 @@ def configure(
     if STATE["cache"] is not None:
         STATE["cache"].close()
     STATE["cache"] = Cache(str(cache_path))
+    if STATE["library"] is not None:
+        STATE["library"].close()
+    STATE["library"] = Library(str(config_dir() / "library.db"))
     STATE["roots"] = [r.resolve() for r in roots]
     STATE.update(pdf=None, doc=None, docs={}, pages=[], sizes=[])
     if pdf is not None:
