@@ -222,6 +222,16 @@ def index() -> HTMLResponse:
     return HTMLResponse((static_dir() / "index.html").read_text("utf-8"))
 
 
+@app.get("/static/{name:path}")
+def static_files(name: str) -> FileResponse:
+    """前端静态资源(css/js)。解析后必须仍在 static 目录内, 防路径穿越。"""
+    base = static_dir().resolve()
+    p = (base / name).resolve()
+    if not p.is_file() or (p != base and base not in p.parents):
+        raise HTTPException(404, "资源不存在")
+    return FileResponse(p, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/api/docs")
 def list_docs() -> dict:
     """列出当前打开的所有文档, 供前端恢复标签栏。"""
