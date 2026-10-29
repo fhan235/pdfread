@@ -195,7 +195,8 @@
   /* EPUB 章节(左栏): 纸面样式 */
   .echapter { background: #fbf9f4; color: #26221c; border-radius: 4px;
               padding: 30px 36px; font-family: Georgia, "Songti SC",
-              "SimSun", serif; font-size: 15px; line-height: 1.9;
+              "SimSun", serif; font-size: var(--efs, 16px);
+              line-height: var(--elh, 1.9);
               min-height: 120px; }
   .echapter h1, .echapter h2, .echapter h3 { line-height: 1.4;
               margin: .8em 0 .5em; }

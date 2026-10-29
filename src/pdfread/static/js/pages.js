@@ -5,7 +5,7 @@
 function buildLeft() {
   left.innerHTML = "";
   if (INFO.doc) delete wordsByDoc[INFO.doc];  // 重新解析后词坐标可能变化, 强制重取
-  const epub = INFO.fmt === "epub";
+  const epub = INFO.fmt !== "pdf";   // EPUB/TXT 均走章节渲染
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
     const d = document.createElement("div");
@@ -28,7 +28,7 @@ function attachLeftObserver() {
   if (leftObserver) leftObserver.disconnect();
   if (!INFO || !INFO.doc) return;
   const documentId = INFO.doc;
-  const epub = INFO.fmt === "epub";
+  const epub = INFO.fmt !== "pdf";
   const io = new IntersectionObserver((ents) => {
     ents.forEach((e) => {
       if (!e.isIntersecting) return;

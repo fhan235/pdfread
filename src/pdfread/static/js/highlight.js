@@ -6,7 +6,7 @@ const wordsByDoc = {};   // 运行时文档 id -> { 页码: [[x0,y0,x1,y1,词,�
 let drag = null;
 
 async function loadMarks() {
-  if (!INFO || !INFO.doc || !INFO.lib || INFO.fmt === "epub") return;
+  if (!INFO || !INFO.doc || !INFO.lib || INFO.fmt !== "pdf") return;
   if (!marksByDoc[INFO.doc]) {
     try {
       const r = await fetch("/api/highlights?doc=" + INFO.doc);
@@ -148,7 +148,7 @@ async function recoverLib() {
 }
 
 left.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !INFO || INFO.fmt === "epub") return;
+  if (e.button !== 0 || !INFO || INFO.fmt !== "pdf") return;
   if (!INFO.lib) { recoverLib(); return; }
   const wrap = e.target.closest(".imgwrap");
   if (!wrap) return;
@@ -214,7 +214,7 @@ document.addEventListener("mouseup", (e) => {
 
 /* 双击单词: 直接选中该词, 弹出划线/翻译确认 */
 left.addEventListener("dblclick", (e) => {
-  if (!INFO || INFO.fmt === "epub") return;
+  if (!INFO || INFO.fmt !== "pdf") return;
   if (!INFO.lib) { recoverLib(); return; }
   const wrap = e.target.closest(".imgwrap");
   if (!wrap) return;

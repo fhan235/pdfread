@@ -136,7 +136,7 @@ def _safe_resolve(raw: str) -> Path:
     p = Path(raw).expanduser().resolve()
     if not _within_roots(p):
         raise HTTPException(403, "该路径不在允许访问的目录内")
-    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub"):
+    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub", ".txt"):
         raise HTTPException(404, "PDF / EPUB 文件不存在")
     return p
 
@@ -185,16 +185,20 @@ def _register(path: Path, data: dict, name: str | None = None) -> dict:
 
 def _inspect_fn(path: Path):
     """按格式选择解析函数(在 PDF 进程池中执行, 崩溃隔离一致)。"""
-    if path.suffix.lower() == ".epub":
+    suffix = path.suffix.lower()
+    if suffix == ".epub":
         from .epub import inspect_epub
         return inspect_epub, True, {}
+    if suffix == ".txt":
+        from .txt import inspect_txt
+        return inspect_txt, True, {}
     from .settings import get_parse
     return inspect_pdf, True, get_parse()
 
 
 def _load(path: Path, skip_references: bool = True) -> None:
     fn, _, opts = _inspect_fn(path)
-    if path.suffix.lower() == ".epub":
+    if path.suffix.lower() != ".pdf":   # EPUB/TXT 无解析选项
         data = _executor().submit(fn, str(path)).result()
     else:
         data = _executor().submit(fn, str(path), skip_references, opts).result()
@@ -216,7 +220,7 @@ async def _restart_executor() -> None:
 
 async def _inspect(path: Path, skip_references: bool) -> dict:
     fn, _, opts = _inspect_fn(path)
-    args = (str(path),) if path.suffix.lower() == ".epub" else (str(path), skip_references, opts)
+    args = (str(path),) if path.suffix.lower() != ".pdf" else (str(path), skip_references, opts)
     try:
         return await asyncio.get_running_loop().run_in_executor(_executor(), fn, *args)
     except Exception:
@@ -367,7 +371,7 @@ def browse(dir: str = "") -> dict:
                 continue
             if e.is_dir():
                 dirs.append({"name": e.name, "path": str(e)})
-            elif e.suffix.lower() in (".pdf", ".epub"):
+            elif e.suffix.lower() in (".pdf", ".epub", ".txt"):
                 try:
                     size = e.stat().st_size
                 except OSError:
@@ -483,7 +487,7 @@ async def library_open(payload: dict) -> dict:
         raise HTTPException(404, "文档不在文库中")
     raw, name = entry
     p = Path(raw).expanduser().resolve()
-    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub"):
+    if not p.is_file() or p.suffix.lower() not in (".pdf", ".epub", ".txt"):
         raise HTTPException(404, "文件已不在原位置，请重新导入")
     # 已打开的文档直接激活, 不重复解析(整篇解析是打开的主要耗时)
     for old in STATE["docs"].values():
@@ -509,8 +513,8 @@ async def library_open(payload: dict) -> dict:
 async def words(num: int, doc: str = "") -> dict:
     """一页的词坐标, 供划线吸附(仅 PDF)。"""
     current = _document(doc)
-    if current.get("fmt") == "epub":
-        raise HTTPException(400, "EPUB 暂不支持划线")
+    if current.get("fmt", "pdf") != "pdf":
+        raise HTTPException(400, "该格式暂不支持划线")
     if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
     try:
@@ -629,7 +633,7 @@ async def upload(file: UploadFile = File(...), skip_references: bool = True) -> 
     """上传 PDF/EPUB 并立即打开。存到用户缓存目录, 不污染安装目录。"""
     name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     ext = Path(name).suffix.lower()
-    if ext not in (".pdf", ".epub"):
+    if ext not in (".pdf", ".epub", ".txt"):
         raise HTTPException(400, "仅支持 PDF / EPUB 文件")
 
     dest_dir = uploads_dir()
@@ -745,11 +749,11 @@ async def set_parse_settings(payload: dict, doc: str = "") -> dict:
 
 @app.get("/api/chapter/{num}")
 async def chapter_html(num: int, doc: str = "") -> HTMLResponse:
-    """EPUB 章节净化 HTML, 供左栏渲染(替代 PDF 页面图片)。"""
+    """净化后的章节 HTML(EPUB/TXT), 供左栏渲染(替代 PDF 页面图)。"""
     current = _document(doc)
     htmls = current.get("html")
     if htmls is None:
-        raise HTTPException(400, "该文档不是 EPUB")
+        raise HTTPException(400, "该文档没有章节内容")
     if not (1 <= num <= len(htmls)):
         raise HTTPException(404, "章节超出范围")
     return HTMLResponse(htmls[num - 1],
@@ -777,8 +781,8 @@ async def epub_resource(num: int, path: str = Query(...), doc: str = "") -> Resp
 async def page_svg(num: int, doc: str = "") -> Response:
     """矢量页面(默认渲染方式): 文字转路径, 缩放不失真, 无需 DPI 计算。"""
     current = _document(doc)
-    if current.get("fmt") == "epub":
-        raise HTTPException(400, "EPUB 无页面图，请使用章节接口")
+    if current.get("fmt", "pdf") != "pdf":
+        raise HTTPException(400, "该格式无页面图，请使用章节接口")
     if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
     try:
@@ -798,8 +802,8 @@ async def page_svg(num: int, doc: str = "") -> Response:
 @app.get("/api/page/{num}.png")
 async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
     current = _document(doc)
-    if current.get("fmt") == "epub":
-        raise HTTPException(400, "EPUB 无页面图片，请使用章节接口")
+    if current.get("fmt", "pdf") != "pdf":
+        raise HTTPException(400, "该格式无页面图片，请使用章节接口")
     if not (1 <= num <= len(current["pages"])):
         raise HTTPException(404, "页码超出范围")
     dpi = max(60, min(dpi, 450))
@@ -1095,8 +1099,8 @@ async def summary_doc(payload: dict) -> dict:
 @app.get("/api/raw")
 async def raw_pdf(doc: str = "") -> FileResponse:
     current = _document(doc)
-    mime = ("application/epub+zip" if current.get("fmt") == "epub"
-            else "application/pdf")
+    mime = {"epub": "application/epub+zip", "txt": "text/plain"}.get(
+        current.get("fmt"), "application/pdf")
     return FileResponse(current["path"], media_type=mime,
                         headers={"Cache-Control": "no-store"})
 

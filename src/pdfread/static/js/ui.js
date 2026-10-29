@@ -102,7 +102,7 @@ async function loadDir(dir) {
     + `<span class="ico">▪</span><span class="nm">${esc(f.name)}</span>`
     + `<span class="sz">${(f.size / 1048576).toFixed(1)} MB</span></div>`);
   if (!rows.length) rows.push(`<div class="row"><span class="nm" style="color:var(--dim)">`
-    + `此目录下没有 PDF / EPUB，可点「上传文件」或拖入</span></div>`);
+    + `此目录下没有 PDF / EPUB / TXT，可点「上传文件」或拖入</span></div>`);
   box.innerHTML = rows.join("");
 }
 
@@ -135,7 +135,7 @@ async function openFile(path) {
 }
 
 function uploadFile(file) {
-  if (!file || !/\.(pdf|epub)$/i.test(file.name)) { setBusy("仅支持 PDF / EPUB 文件", true); return; }
+  if (!file || !/\.(pdf|epub|txt)$/i.test(file.name)) { setBusy("仅支持 PDF / EPUB / TXT 文件", true); return; }
   if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }

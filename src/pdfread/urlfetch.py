@@ -56,8 +56,12 @@ def _blocked_ip(ip) -> bool:
     return any(ip in net for net in _BLOCKED_NETWORKS)
 
 
-def validate_url(url: str, *, resolve: bool = True) -> str:
-    """校验 URL 合法性并拦截内网目标, 返回规范化后的 URL。"""
+def resolve_checked(url: str) -> tuple[str, str | None]:
+    """校验 URL 并返回 (规范化 URL, 首个已验证的 IP)。
+
+    IP 供调用方做连接钉扎(如浏览器 host-resolver-rules),
+    消除校验与连接之间的 DNS rebinding 窗口。
+    """
     url = url.strip()
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
@@ -68,24 +72,47 @@ def validate_url(url: str, *, resolve: bool = True) -> str:
     if not host:
         raise UrlRejected("链接缺少主机名")
 
+    first: str | None = None
     try:
         ips = [ipaddress.ip_address(host)]
+        first = host
     except ValueError:
-        ips = []
-        if resolve:
-            port = parts.port or (443 if parts.scheme == "https" else 80)
-            try:
-                infos = socket.getaddrinfo(
-                    host, port, type=socket.SOCK_STREAM
-                )
-            except socket.gaierror as exc:
-                raise UrlRejected(f"域名无法解析: {host}") from exc
-            ips = [ipaddress.ip_address(i[4][0]) for i in infos]
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise UrlRejected(f"域名无法解析: {host}") from exc
+        ips = [ipaddress.ip_address(i[4][0]) for i in infos]
+        if ips:
+            first = str(ips[0])
 
     for ip in ips:
         if _blocked_ip(ip):
             raise UrlRejected("目标地址位于环回/内网/保留网段, 已拦截")
-    return parts.geturl()
+    return parts.geturl(), first
+
+
+def validate_url(url: str, *, resolve: bool = True) -> str:
+    """校验 URL 合法性并拦截内网目标, 返回规范化后的 URL。"""
+    if not resolve:
+        # 不解析域名时只做协议/凭证/字面量 IP 校验
+        url = url.strip()
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            raise UrlRejected("仅支持 http/https 链接")
+        if parts.username or parts.password:
+            raise UrlRejected("链接中不允许包含用户名或密码")
+        host = parts.hostname
+        if not host:
+            raise UrlRejected("链接缺少主机名")
+        try:
+            lit = ipaddress.ip_address(host)
+        except ValueError:
+            lit = None
+        if lit is not None and _blocked_ip(lit):
+            raise UrlRejected("目标地址位于环回/内网/保留网段, 已拦截")
+        return parts.geturl()
+    return resolve_checked(url)[0]
 
 
 def normalize_url(url: str) -> str:
@@ -198,7 +225,10 @@ def fetch_document(
                 progress("convert", 0, None)
             from .browser import html_to_pdf
 
-            html_to_pdf(final_url, tmp)
+            # 重新解析取已验证 IP 并钉给浏览器: 主文档直连该 IP,
+            # 页面内其他域名(跳转/子资源)解析全部失败, 见 browser.html_to_pdf
+            final_url, pinned_ip = resolve_checked(final_url)
+            html_to_pdf(final_url, tmp, pinned_ip=pinned_ip)
 
         with tmp.open("rb") as fh:
             if fh.read(4) != b"%PDF":

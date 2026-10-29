@@ -43,11 +43,23 @@ _IMG_EXT = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
 }
+# 解压上限: 防恶意 EPUB 构造 zip bomb 耗尽内存
+_MAX_MEMBER = 20 * 1024 * 1024    # 单个包内文件
+_MAX_TOTAL = 300 * 1024 * 1024    # 整包累计
 _WS = re.compile(r"\s+")
 
 
+def _read_member(zf: zipfile.ZipFile, member: str,
+                 limit: int = _MAX_MEMBER) -> bytes:
+    """读包内文件, 先按未压缩大小设上限(zip bomb 防护)。"""
+    info = zf.getinfo(member)
+    if info.file_size > limit:
+        raise ValueError(f"包内文件过大(超过 {limit // 1048576}MB 上限)")
+    return zf.read(member)
+
+
 def _opf_path(zf: zipfile.ZipFile) -> str:
-    root = ET.fromstring(zf.read("META-INF/container.xml"))
+    root = ET.fromstring(_read_member(zf, "META-INF/container.xml"))
     node = root.find(".//container:rootfile", _NS)
     if node is None or not node.get("full-path"):
         raise ValueError("EPUB 缺少 OPF 声明")
@@ -59,15 +71,17 @@ def _text_of(tag) -> str:
 
 
 def _sanitize(soup, base: str) -> str:
-    """净化章节内容: 去脚本/事件/外链, 图片重写到包内资源端点。"""
+    """净化章节内容: 去脚本/事件/内联样式/外链, 图片重写到包内资源端点。"""
     for tag in soup.find_all(["script", "style", "link", "meta", "iframe",
                               "object", "embed", "form", "input", "button",
                               "audio", "video"]):
         tag.decompose()
     for tag in soup.find_all(True):
-        # 事件属性与危险协议
+        # 事件属性、内联样式、class/id 全部清除:
+        # style 可含 url() 外发请求或 fixed 覆盖层; class/id 可能撞应用自身样式
         for attr in list(tag.attrs):
-            if attr.lower().startswith("on"):
+            la = attr.lower()
+            if la.startswith("on") or la in ("style", "class", "id"):
                 del tag[attr]
         for attr in ("href", "src"):
             val = tag.get(attr)
@@ -77,11 +91,16 @@ def _sanitize(soup, base: str) -> str:
             tag.unwrap()
         elif tag.name == "img":
             src = tag.get("src", "")
-            if src:
+            if not src:
+                tag.decompose()
+            elif re.match(r"(?i)\s*https?://", src):
+                # 外链图片(追踪/泄漏风险)替换为占位说明
+                ph = soup.new_tag("span")
+                ph.string = "[外链图片已省略]"
+                tag.replace_with(ph)
+            else:
                 tag["src"] = "__EPUB_RES__" + posixpath.normpath(
                     posixpath.join(base, src))
-            else:
-                tag.decompose()
     return "".join(str(c) for c in soup.children)
 
 
@@ -93,10 +112,11 @@ def inspect_epub(path: str, parse_options: dict | None = None) -> dict:
     toc: list[list] = []
 
     try:
+        total_inflated = 0
         with zipfile.ZipFile(path) as zf:
             opf = _opf_path(zf)
             base_dir = posixpath.dirname(opf)
-            root = ET.fromstring(zf.read(opf))
+            root = ET.fromstring(_read_member(zf, opf))
 
             title_node = root.find(".//dc:title", _NS)
             title = (title_node.text or "").strip() if title_node is not None else ""
@@ -111,9 +131,12 @@ def inspect_epub(path: str, parse_options: dict | None = None) -> dict:
                     continue
                 member = posixpath.normpath(posixpath.join(base_dir, href))
                 try:
-                    raw = zf.read(member)
+                    raw = _read_member(zf, member)
                 except KeyError:
                     continue
+                total_inflated += len(raw)
+                if total_inflated > _MAX_TOTAL:
+                    raise ValueError("EPUB 解压总量过大(疑似压缩炸弹)")
                 soup = BeautifulSoup(raw, "html.parser")
                 body = soup.find("body") or soup
 
@@ -168,7 +191,7 @@ def read_resource(path: str, member: str) -> tuple[bytes, str]:
         raise ValueError("仅允许图片资源")
     with zipfile.ZipFile(path) as zf:
         try:
-            data = zf.read(member)
+            data = _read_member(zf, member)
         except KeyError:
             raise ValueError("资源不存在") from None
     return data, _IMG_EXT[ext]

@@ -3,7 +3,7 @@ const PREF_KEY = "pdfread.prefs";
 let prefs = { theme: "dark", font: "15", layout: "side", layoutPrev: "side",
               expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340,
-              toc: false };
+              toc: false, efont: 16, eline: 1.9 };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
@@ -84,6 +84,16 @@ function applyPrefs() {
     !customTheme && prefs.theme === "green");
   document.body.classList.toggle("italic-src", !!prefs.italicSrc);
   document.documentElement.style.setProperty("--rfs", prefs.font + "px");
+  document.documentElement.style.setProperty("--efs", (prefs.efont || 16) + "px");
+  document.documentElement.style.setProperty("--elh", prefs.eline || 1.9);
+  const ef = $("#efontRange");
+  if (ef) ef.value = prefs.efont || 16;
+  const efv = $("#efontVal");
+  if (efv) efv.textContent = prefs.efont || 16;
+  const el = $("#elineRange");
+  if (el) el.value = prefs.eline || 1.9;
+  const elv = $("#elineVal");
+  if (elv) elv.textContent = prefs.eline || 1.9;
   const m = document.querySelector("main");
   m.classList.toggle("stacked", prefs.layout === "stack");
   m.classList.toggle("tronly", prefs.layout === "tronly");
@@ -441,6 +451,20 @@ $("#cbItalic").onchange = (e) => {
   savePrefs();
   applyPrefs();
 };
+
+/* 书籍(EPUB/TXT)字号与行距: 拖动即时预览, 松手保存 */
+$("#efontRange").addEventListener("input", (e) => {
+  prefs.efont = e.target.value;
+  document.documentElement.style.setProperty("--efs", prefs.efont + "px");
+  $("#efontVal").textContent = prefs.efont;
+});
+$("#efontRange").addEventListener("change", () => { savePrefs(); });
+$("#elineRange").addEventListener("input", (e) => {
+  prefs.eline = e.target.value;
+  document.documentElement.style.setProperty("--elh", prefs.eline);
+  $("#elineVal").textContent = prefs.eline;
+});
+$("#elineRange").addEventListener("change", () => { savePrefs(); });
 
 /* PDF 缩放(60%–250%): 放大后按新宽度重取高清图; 划线按百分比定位, 不错位 */
 /* 放大超出栏宽时 margin:auto 会失效(内容贴左溢出), 需要把横向滚动位置置中 */

@@ -11,7 +11,7 @@
 <header>
   <!-- 文件 -->
   <button id="btnLib" class="ghost" title="文档库：文件夹与标签管理">文库</button>
-  <button id="btnOpen" class="ghost" title="选择或上传 PDF / EPUB">打开</button>
+  <button id="btnOpen" class="ghost" title="选择或上传 PDF / EPUB / TXT">打开</button>
 
   <!-- 翻译 -->
   <label>页</label>
@@ -155,8 +155,8 @@
       <button id="pkAddRoot" class="ghost" type="button">添加目录</button>
     </div>
     <div class="tip">
-      也可以直接把 PDF / EPUB 拖到窗口任意位置
-      <input type="file" id="pkFile" accept=".pdf,.epub" hidden />
+      也可以直接把 PDF / EPUB / TXT 拖到窗口任意位置
+      <input type="file" id="pkFile" accept=".pdf,.epub,.txt" hidden />
     </div>
   </div>
 </div>
@@ -240,6 +240,14 @@
         </div>
         <label class="chk"><input type="checkbox" id="cbItalic" />
           原文用斜体显示</label>
+        <div class="fld">
+          <label>书籍字号（EPUB / TXT）<span class="fv" id="efontVal">16</span></label>
+          <input id="efontRange" type="range" min="13" max="24" step="0.5" value="16" />
+        </div>
+        <div class="fld">
+          <label>书籍行距 <span class="fv" id="elineVal">1.9</span></label>
+          <input id="elineRange" type="range" min="1.4" max="2.4" step="0.1" value="1.9" />
+        </div>
       </div>
 
       <div class="sec">

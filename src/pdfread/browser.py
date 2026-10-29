@@ -53,10 +53,17 @@ def find_browser() -> str | None:
     return cands[0] if cands else None
 
 
-def html_to_pdf(url: str, dest: Path, timeout: float = 90.0) -> None:
+def html_to_pdf(url: str, dest: Path, timeout: float = 90.0,
+                pinned_ip: str | None = None) -> None:
     """用系统浏览器 headless 模式把网页打印成 PDF。
 
     没有可用浏览器时抛出 RuntimeError, 调用方应提示用户改用 PDF 链接。
+
+    SSRF 防护: 页面加载后执行的 JS / meta refresh / 子资源请求不经过
+    urlfetch 的白名单校验, 因此用 --host-resolver-rules 把目标域名钉到
+    已校验的 IP, 其余域名一律解析失败。
+    残余风险: 页面内以 IP 字面量直链的内网资源(不经 DNS)无法被该机制拦截,
+    转换网页链接时应知晓这一点。
     """
     browser = find_browser()
     if browser is None:
@@ -72,9 +79,17 @@ def html_to_pdf(url: str, dest: Path, timeout: float = 90.0) -> None:
         "--no-pdf-header-footer",
         # 给 JS 渲染留出虚拟时间, 提升动态页面完整度
         "--virtual-time-budget=10000",
-        f"--print-to-pdf={dest}",
-        url,
     ]
+    if pinned_ip:
+        from urllib.parse import urlsplit
+        host = urlsplit(url).hostname
+        if host:
+            # 目标域名钉到已校验 IP(顺带消除 DNS rebinding 窗口),
+            # 其余所有域名解析失败, 阻断页面级跳转到内网
+            cmd.append(
+                f"--host-resolver-rules=MAP {host} {pinned_ip}, MAP * ~NOTFOUND"
+            )
+    cmd += [f"--print-to-pdf={dest}", url]
     try:
         proc = subprocess.run(
             cmd,

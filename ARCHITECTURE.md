@@ -31,7 +31,8 @@ FastAPI（127.0.0.1 本机）+ 无构建多文件前端的 PDF/EPUB 双栏对照
 | `library.py` | 文库 + 高亮的 SQLite 持久化 | `Library`；表结构在 `_SCHEMA` |
 | `settings.py` | 本地配置（API Key 0600、解析选项、历史、按服务的模型/base_url/qa_model） | `profile()` / `update_translation()` / `get_parse()` |
 | `paths.py` | 跨平台路径：缓存/配置/上传/白名单根目录 | `cache_dir()` `config_dir()` `uploads_dir()` |
-| `epub.py` | EPUB 原生解析（章节即页） | `inspect_epub` / `read_resource` |
+| `epub.py` | EPUB 原生解析（章节即页） | `inspect_epub` / `read_resource`；解压大小上限防 zip bomb；`_sanitize` 去脚本/事件/内联样式/外链图 |
+| `txt.py` | TXT 原生解析（编码检测、章节识别、按字符切块） | `inspect_txt` |
 | `urlfetch.py` | URL 打开（SSRF 校验、headless 网页转 PDF） | `normalize_url` / `fetch_document` |
 | `_macos.py` | macOS Dock 图标处理 | — |
 
@@ -118,4 +119,7 @@ node --test tests/test_frontend.cjs                 # 前端（需 Node 22+）
 
 仅绑 127.0.0.1 + TrustedHost + 同源中间件；路径白名单防穿越；上传限扩展名/200MB；
 密钥环境变量优先、不返回前端、不入日志；前端一律 `esc()`/`textContent` 输出；
-urlfetch 拦内网/凭证 URL；解析在独立进程，失败重建进程池释放句柄。
+urlfetch 拦内网/凭证 URL 并返回已验证 IP；网页转 PDF 时 Chrome 用
+`--host-resolver-rules` 钉住该 IP 且其余域名解析失败(页面级跳转/子资源拦截,
+残余风险: IP 字面量直链的内网资源不经 DNS 无法拦截)；
+EPUB 解压设单文件/总量上限防 zip bomb；解析在独立进程，失败重建进程池释放句柄。
