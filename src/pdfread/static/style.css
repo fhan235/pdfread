@@ -219,8 +219,14 @@
   /* calibre 等转换器用 class 而非 b/strong 表达粗体 */
   .echapter .bold { font-weight: 700; }
   .echapter p { margin: 0 0 .9em; text-align: justify; }
-  .echapter img { max-width: 100%; height: auto; display: block;
-              margin: 12px auto; min-height: 0; background: transparent; }
+  /* EPUB/TXT 图片: 行内符号(公式等)保持原尺寸随文排列,
+     不继承 .pg img 的 width:100%; 独立大图限宽限高 */
+  .echapter img { display: inline-block; vertical-align: middle;
+              width: auto; max-width: 100%; max-height: 80vh;
+              height: auto; margin: 2px 1px; min-height: 0;
+              background: transparent; }
+  /* 独占一段的图(封面/插图)居中显示 */
+  .echapter p:has(> img:only-child) { text-align: center; margin: 12px 0; }
   .echapter table { border-collapse: collapse; width: 100%; font-size: 13px; }
   .echapter td, .echapter th { border: 1px solid #ccc; padding: 4px 8px; }
   .echapter blockquote { margin: 12px 0; padding: 4px 14px; color: #555;
