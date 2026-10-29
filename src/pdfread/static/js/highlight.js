@@ -187,6 +187,15 @@ document.addEventListener("mousemove", (e) => {
   previewSelection();
 });
 
+/* 保留预览并弹出「划线/翻译」确认按钮 */
+function confirmSelection(page, layer, rects, text, x, y) {
+  pendingMark = { page, rects, layer, text, x, y };
+  const pop = $("#hlConfirm");
+  pop.style.display = "flex";   // 两按钮并排
+  pop.style.left = Math.min(x, window.innerWidth - 220) + "px";
+  pop.style.top = (y + 8) + "px";
+}
+
 document.addEventListener("mouseup", (e) => {
   if (!drag) return;
   const d = drag;
@@ -199,13 +208,31 @@ document.addEventListener("mouseup", (e) => {
     return;
   }
   // 保留预览, 等用户点浮动按钮确认
-  pendingMark = { page: d.page, rects, layer: d.layer,
-                  text: selectionText(d.words, d.start, d.cur),
-                  x: e.clientX, y: e.clientY };
-  const pop = $("#hlConfirm");
-  pop.style.display = "flex";   // 两按钮并排
-  pop.style.left = Math.min(e.clientX, window.innerWidth - 220) + "px";
-  pop.style.top = (e.clientY + 8) + "px";
+  confirmSelection(d.page, d.layer, rects,
+                   selectionText(d.words, d.start, d.cur), e.clientX, e.clientY);
+});
+
+/* 双击单词: 直接选中该词, 弹出划线/翻译确认 */
+left.addEventListener("dblclick", (e) => {
+  if (!INFO || INFO.fmt === "epub") return;
+  if (!INFO.lib) { recoverLib(); return; }
+  const wrap = e.target.closest(".imgwrap");
+  if (!wrap) return;
+  const pg = wrap.closest(".pg");
+  if (!pg) return;
+  const page = +pg.id.slice(1);
+  ensureWords(page).then((words) => {
+    const pt = pagePoint(wrap, page, e);
+    const idx = hitWord(words, pt.x, pt.y);
+    if (idx < 0) return;
+    discardPending();
+    const layer = wrap.querySelector(".hlayer");
+    const rects = selectionRects(words, idx, idx);
+    const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+    for (const r of rects) layer.appendChild(hlDiv(r, pw, ph, 0, " preview"));
+    confirmSelection(page, layer, rects,
+                     selectionText(words, idx, idx), e.clientX, e.clientY);
+  }).catch(() => {});
 });
 
 $("#hlOk").onclick = async () => {
