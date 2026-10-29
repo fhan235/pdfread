@@ -126,8 +126,30 @@ function previewSelection() {
   }
 }
 
+/* 文库登记偶发失败会让 INFO.lib 缺失(后端静默容错), 导致划线整体失效。
+   按下时若缺 lib 则重新拉取一次 info 尝试恢复, 并给出可见提示 */
+let libRecovering = false;
+async function recoverLib() {
+  if (libRecovering || !INFO || !INFO.doc) return;
+  libRecovering = true;
+  try {
+    const r = await fetch("/api/info?doc=" + encodeURIComponent(INFO.doc));
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.doc !== INFO.doc) return;
+    INFO = d;
+    const t = curTab();
+    if (t) t.info = d;
+    $("#runStatus").textContent = INFO.lib
+      ? ""
+      : "该文档未登记到文库，划线与阅读进度暂不可用，可尝试重新打开文档";
+  } catch (e) { /* 网络失败保持现状 */ }
+  libRecovering = false;
+}
+
 left.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !INFO || !INFO.lib || INFO.fmt === "epub") return;
+  if (e.button !== 0 || !INFO || INFO.fmt === "epub") return;
+  if (!INFO.lib) { recoverLib(); return; }
   const wrap = e.target.closest(".imgwrap");
   if (!wrap) return;
   const pg = wrap.closest(".pg");
@@ -151,10 +173,17 @@ document.addEventListener("mousemove", (e) => {
   if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 4) {
     drag.moved = true;
   }
-  if (!drag.moved || drag.start < 0) return;
+  if (!drag.moved) return;
   const pt = pagePoint(drag.wrap, drag.page, e);
   const idx = hitWord(drag.words, pt.x, pt.y);
-  if (idx >= 0 && idx !== drag.cur) { drag.cur = idx; }
+  if (idx < 0) return;
+  if (drag.start < 0) {
+    // 按下点落在行距/空白处: 拖到第一个词时才确立起点, 不作废整段手势
+    drag.start = idx;
+    drag.cur = idx;
+  } else if (idx !== drag.cur) {
+    drag.cur = idx;
+  }
   previewSelection();
 });
 
