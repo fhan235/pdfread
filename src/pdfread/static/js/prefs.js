@@ -367,6 +367,20 @@ $("#zoomIn").onclick = () => setZoom((prefs.zoom || 1) + 0.1);
 $("#zoomOut").onclick = () => setZoom((prefs.zoom || 1) - 0.1);
 $("#zoomVal").onclick = () => setZoom(1);
 
+/* Ctrl/Cmd + 滚轮: 只缩放 PDF 栏; 同时拦掉浏览器整页缩放, 避免两栏比例错位。
+   触控板捏合会产生带 ctrlKey 的高频小步进 wheel 事件, 累加换算成 10% 档位 */
+let wheelAcc = 0;
+window.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  if (!left.contains(e.target)) return;   // 光标不在 PDF 栏时仅拦截整页缩放
+  wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : 1);  // 行模式换算成像素
+  while (Math.abs(wheelAcc) >= 50) {
+    setZoom((prefs.zoom || 1) + (wheelAcc < 0 ? 0.1 : -0.1));
+    wheelAcc += wheelAcc < 0 ? 50 : -50;
+  }
+}, { passive: false });
+
 $("#btnExport").onclick = doExport;
 $("#btnExp").onclick = doExport;
 
