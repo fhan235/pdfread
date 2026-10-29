@@ -172,6 +172,12 @@
           <select id="cfgProvider"></select>
         </div>
         <div class="fld">
+          <label>模型（留空用默认）</label>
+          <input id="cfgModel" type="text" autocomplete="off"
+                 placeholder="默认模型" list="cfgModelList" />
+          <datalist id="cfgModelList"></datalist>
+        </div>
+        <div class="fld">
           <label>API Key</label>
           <div class="keywrap">
             <input id="cfgKey" type="password" autocomplete="off"

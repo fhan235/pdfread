@@ -26,7 +26,8 @@ import httpx
 PROVIDERS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        # 官方现行主力模型(V4.1-Flash); 可在设置面板改为 deepseek-v4-pro 等
+        "model": "deepseek-flash",
         "key_env": "DEEPSEEK_API_KEY",
     },
     "silicon": {

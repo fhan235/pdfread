@@ -157,6 +157,11 @@ async function openCfg() {
 function syncCfgHint() {
   const it = (CFG?.items || []).find((x) => x.provider === $("#cfgProvider").value);
   const h = $("#cfgHint"), inp = $("#cfgKey");
+  // 模型可自定义, 留空回落到该服务的预设默认模型
+  const mi = $("#cfgModel");
+  mi.value = it?.custom_model || "";
+  mi.placeholder = it ? `默认: ${it.model}` : "默认模型";
+  $("#cfgModelList").innerHTML = it ? `<option value="${esc(it.model)}">` : "";
   if (!it) { h.textContent = ""; return; }
   inp.value = "";
   if (!it.needs_key) {
@@ -181,7 +186,8 @@ function syncCfgHint() {
 }
 
 async function saveCfg() {
-  const body = { provider: $("#cfgProvider").value };
+  const body = { provider: $("#cfgProvider").value,
+                 model: $("#cfgModel").value.trim() };
   const k = $("#cfgKey").value.trim();
   if (k) body.key = k;
   $("#cfgHint").textContent = "保存中…";
