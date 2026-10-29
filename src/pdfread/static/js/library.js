@@ -117,6 +117,7 @@ async function openLibDoc(id) {
     }
   } finally {
     clearTimeout(busyTimer);
+    hideBusy();
   }
 }
 

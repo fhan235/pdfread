@@ -128,6 +128,7 @@ async function openFile(path) {
   } catch (e) {
     if (serial === fileSerial) {
       right.innerHTML = previous;
+      hideBusy();
       $("#runStatus").textContent = "打开失败：" + e;
     }
   }
@@ -168,11 +169,13 @@ function uploadFile(file) {
     let msg = xhr.status;
     try { msg = JSON.parse(xhr.responseText).detail || msg; } catch (e) {}
     right.innerHTML = previous;
+    hideBusy();
     $("#runStatus").textContent = "上传失败：" + msg;
   };
   xhr.onerror = () => {
     if (serial !== fileSerial) return;
     right.innerHTML = previous;
+    hideBusy();
     $("#runStatus").textContent = "上传失败：网络错误";
   };
   const fd = new FormData();
@@ -180,7 +183,23 @@ function uploadFile(file) {
   xhr.send(fd);
 }
 
+/* 浮动加载卡片(右下角): 译文栏隐藏的布局下也能看到打开进度 */
+let busyErrTimer = null;
+function showBusyOverlay(html, isErr) {
+  const el = $("#busy");
+  el.innerHTML = html;
+  el.classList.toggle("err", !!isErr);
+  el.classList.add("on");
+  clearTimeout(busyErrTimer);
+  if (isErr) busyErrTimer = setTimeout(hideBusy, 6000);   // 错误提示短暂停留
+}
+function hideBusy() {
+  clearTimeout(busyErrTimer);
+  $("#busy").classList.remove("on");
+}
+
 function setBusy(msg, err) {
+  showBusyOverlay(esc(msg), err);
   right.innerHTML = `<div class="empty"${err ? ' style="color:#ff7a7a"' : ""}>${esc(msg)}</div>`;
 }
 
@@ -189,14 +208,17 @@ function setBusyProg(msg, pct) {
   const bar = pct == null
     ? `<div class="indet"></div>`
     : `<div style="width:${Math.min(100, Math.max(0, pct))}%"></div>`;
-  right.innerHTML = `<div class="empty"><div class="busywrap">`
+  const html = `<div class="busywrap">`
     + `<div class="busymsg">${esc(msg)}</div>`
-    + `<div class="busybar">${bar}</div></div></div>`;
+    + `<div class="busybar">${bar}</div></div>`;
+  showBusyOverlay(html, false);
+  right.innerHTML = `<div class="empty">${html}</div>`;
 }
 
 const fmtMB = (b) => (b == null ? "" : (b / 1048576).toFixed(1) + " MB");
 
 async function reload(data) {
+  hideBusy();
   addOrActivateTab(data);
 }
 
@@ -248,6 +270,7 @@ async function openUrl() {
   } catch (e) {
     if (serial === fileSerial) {
       right.innerHTML = previous;
+      hideBusy();
       $("#runStatus").textContent = "打开失败：" + e;
     }
   } finally { clearInterval(timer); }
