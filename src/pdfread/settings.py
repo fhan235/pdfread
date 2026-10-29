@@ -106,14 +106,16 @@ def set_provider(name: str) -> None:
     update_translation(name)
 
 
-def update_translation(provider: str, model=None, base_url=None, key=None) -> None:
+def update_translation(provider: str, model=None, base_url=None, key=None,
+                       qa_model=None) -> None:
     from .translate import PROVIDERS
 
     with _LOCK:
         data = load()
         data["provider"] = provider
         profile = data.setdefault("profiles", {}).setdefault(provider, {})
-        for name, value in (("model", model), ("base_url", base_url)):
+        for name, value in (("model", model), ("base_url", base_url),
+                            ("qa_model", qa_model)):
             if value is not None:
                 profile[name] = value
         if key is not None:
@@ -130,7 +132,7 @@ def profile(provider: str) -> dict:
     value = load().get("profiles", {}).get(provider, {})
     if not isinstance(value, dict):
         return {}
-    return {key: val for key, val in value.items() if key in {"model", "base_url"} and isinstance(val, str)}
+    return {key: val for key, val in value.items() if key in {"model", "base_url", "qa_model"} and isinstance(val, str)}
 
 
 def translation_config(provider=None, model=None, base_url=None, **kwargs):

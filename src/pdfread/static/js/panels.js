@@ -61,7 +61,7 @@ function toggleQA() {
   $("#btnQA").classList.toggle("on", on);
   prefs.qa = on;
   savePrefs();
-  if (on) { renderQA(); $("#qaIn").focus(); }
+  if (on) { renderQA(); loadQaModel(); $("#qaIn").focus(); }
 }
 
 /* 极简 Markdown 渲染(先转义再变换, 防注入):
@@ -180,6 +180,34 @@ async function qaSend() {
 
 $("#btnQA").onclick = toggleQA;
 $("#qaSend").onclick = qaSend;
+
+/* 问答模型: 独立于翻译模型, 按服务记忆; 留空则与翻译模型一致 */
+async function loadQaModel() {
+  try {
+    const d = await (await fetch("/api/settings")).json();
+    const it = (d.items || []).find((x) => x.provider === d.current);
+    if (!it) return;
+    const inp = $("#qaModel");
+    inp.value = it.qa_model || "";
+    inp.placeholder = "默认: " + (it.custom_model || it.model);
+    $("#qaModelList").innerHTML = (it.models || [])
+      .map((m) => `<option value="${esc(m)}">`).join("");
+  } catch (e) { /* 设置读取失败时保持现状 */ }
+}
+let qaModelSaveTimer = null;
+$("#qaModel").addEventListener("change", () => {
+  clearTimeout(qaModelSaveTimer);
+  qaModelSaveTimer = setTimeout(async () => {
+    try {
+      const r = await libPost("/api/settings", { qa_model: $("#qaModel").value.trim() });
+      if (!r.ok) throw new Error((await r.json()).detail || r.status);
+      $("#qaHint").textContent = "问答模型已保存";
+    } catch (e) {
+      $("#qaHint").textContent = "模型保存失败：" + e;
+    }
+  }, 300);
+});
+loadQaModel();
 
 /* 速读摘要: 固定结构化 prompt, 结果服务端缓存 */
 async function qaSummary() {

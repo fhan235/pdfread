@@ -659,7 +659,9 @@ async def get_settings() -> dict:
         items.append({
             "provider": name,
             "model": PROVIDERS[name]["model"],
+            "models": PROVIDERS[name].get("models", []),
             "custom_model": cfg.model if cfg and cfg.provider == name else saved.get("model", ""),
+            "qa_model": saved.get("qa_model", ""),
             "base_url": cfg.base_url if cfg and cfg.provider == name else saved.get("base_url", ""),
             "key_env": env,
             "needs_key": bool(env),
@@ -682,8 +684,10 @@ async def set_settings(payload: dict, doc: str = "") -> dict:
     saved = profile(provider)
     model = payload.get("model", old.model if provider == old.provider else saved.get("model", ""))
     base_url = payload.get("base_url", old.base_url if provider == old.provider else saved.get("base_url", ""))
+    qa_model = payload.get("qa_model")
     key = payload.get("key")
-    if not isinstance(model, str) or not isinstance(base_url, str) or (key is not None and not isinstance(key, str)):
+    if not isinstance(model, str) or not isinstance(base_url, str) or (key is not None and not isinstance(key, str)) \
+            or (qa_model is not None and not isinstance(qa_model, str)):
         raise HTTPException(400, "设置值必须为字符串")
     if key is not None and not PROVIDERS[provider]["key_env"]:
         raise HTTPException(400, "该服务无需密钥")
@@ -693,7 +697,8 @@ async def set_settings(payload: dict, doc: str = "") -> dict:
         raise HTTPException(400, str(exc)) from None
     if doc:
         _document(doc)
-    update_translation(provider, cfg.model, cfg.base_url, key.strip() if key is not None else None)
+    update_translation(provider, cfg.model, cfg.base_url, key.strip() if key is not None else None,
+                       qa_model.strip() if qa_model is not None else None)
     STATE["cfg"] = cfg
     return info(doc)
 
@@ -975,11 +980,21 @@ def _ask_args(payload: dict):
     return current, question, clean
 
 
+def _qa_cfg() -> TransConfig:
+    """问答/速读专用配置: 若该服务配置了独立的问答模型则覆盖, 否则沿用翻译模型。"""
+    from .settings import profile
+    cfg: TransConfig = replace(STATE["cfg"])
+    qa = profile(cfg.provider).get("qa_model", "").strip()
+    if qa:
+        cfg = replace(cfg, model=qa)
+    return cfg
+
+
 @app.post("/api/ask")
 async def ask_doc(payload: dict) -> dict:
     """基于当前文档全文的 AI 问答(非流式, 保留给简单调用方)。"""
     current, question, clean = _ask_args(payload)
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _qa_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
@@ -995,7 +1010,7 @@ async def ask_doc(payload: dict) -> dict:
 async def ask_stream(payload: dict) -> StreamingResponse:
     """流式问答(SSE): delta 事件逐块推送, done/failure 收尾。"""
     current, question, clean = _ask_args(payload)
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _qa_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
@@ -1041,7 +1056,7 @@ async def translate_text(payload: dict) -> dict:
 async def summary_doc(payload: dict) -> dict:
     """速读摘要: 固定结构化提示词, 结果按(全文, 模型)缓存, 重开零成本。"""
     current = _document(str(payload.get("doc", "")))
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _qa_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:

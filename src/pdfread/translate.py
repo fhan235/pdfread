@@ -26,29 +26,35 @@ import httpx
 PROVIDERS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
-        # 官方现行主力模型(V4.1-Flash); 可在设置面板改为 deepseek-v4-pro 等
-        "model": "deepseek-flash",
+        "model": "deepseek-chat",
         "key_env": "DEEPSEEK_API_KEY",
+        # 可选模型(官方): flash 便宜约 3~4 倍, pro 为旗舰
+        "models": ["deepseek-chat", "deepseek-flash", "deepseek-v4-pro"],
     },
     "silicon": {
         "base_url": "https://api.siliconflow.cn/v1",
         "model": "Qwen/Qwen2.5-7B-Instruct",
         "key_env": "SILICON_API_KEY",
+        "models": ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-72B-Instruct",
+                   "deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"],
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus",
         "key_env": "DASHSCOPE_API_KEY",
+        "models": ["qwen-plus", "qwen-turbo", "qwen-max", "qwen-long"],
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
         "key_env": "OPENAI_API_KEY",
+        "models": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
     },
     "ollama": {
         "base_url": "http://127.0.0.1:11434/v1",
         "model": "qwen2.5:7b",
         "key_env": "",  # 本地无需 key
+        "models": [],   # 本地模型名由用户自行填写
     },
 }
 

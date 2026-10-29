@@ -161,7 +161,8 @@ function syncCfgHint() {
   const mi = $("#cfgModel");
   mi.value = it?.custom_model || "";
   mi.placeholder = it ? `默认: ${it.model}` : "默认模型";
-  $("#cfgModelList").innerHTML = it ? `<option value="${esc(it.model)}">` : "";
+  $("#cfgModelList").innerHTML = (it?.models || [])
+    .map((m) => `<option value="${esc(m)}">`).join("");
   if (!it) { h.textContent = ""; return; }
   inp.value = "";
   if (!it.needs_key) {
