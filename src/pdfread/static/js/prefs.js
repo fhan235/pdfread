@@ -336,6 +336,7 @@ async function saveCfg() {
 }
 
 function refreshMeta() {
+  syncEreadBtn();
   const tag = INFO.paper_mode ? " · 论文模式" : "";
   $("#docMeta").textContent =
     `${INFO.pages} 页 · ${(INFO.chars / 10000).toFixed(1)} 万字符待译 · `
@@ -490,6 +491,22 @@ $("#elineRange").addEventListener("input", (e) => {
   $("#elineVal").textContent = prefs.eline;
 });
 $("#elineRange").addEventListener("change", () => { savePrefs(); });
+
+/* 书籍排版按钮: 仅 EPUB/TXT(可重排格式)时出现在文档标题栏 */
+function syncEreadBtn() {
+  const b = $("#btnEread");
+  if (b) b.style.display =
+    (INFO && INFO.loaded && INFO.fmt && INFO.fmt !== "pdf") ? "" : "none";
+  if (!b || b.style.display === "none") $("#ereadPop")?.classList.remove("on");
+}
+$("#btnEread").onclick = (e) => {
+  e.stopPropagation();
+  $("#ereadPop").classList.toggle("on");
+};
+document.addEventListener("mousedown", (e) => {
+  if (!e.target.closest("#ereadPop") && !e.target.closest("#btnEread"))
+    $("#ereadPop")?.classList.remove("on");
+});
 
 /* 书籍字体: 预设/自定义 */
 $("#efontFamily").onchange = (e) => {

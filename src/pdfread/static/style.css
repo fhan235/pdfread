@@ -47,7 +47,20 @@
   /* ---------- 文档标题栏(功能栏下面一行) ---------- */
   #docbar { display: flex; align-items: baseline; gap: 10px;
             padding: 6px 16px; background: var(--panel);
-            border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+            border-bottom: 1px solid var(--line); flex: 0 0 auto;
+            position: relative; }
+  /* 书籍排版弹层(EPUB/TXT): 点开才占空间 */
+  #ereadPop { display: none; position: absolute; top: 36px; right: 10px;
+              z-index: 60; width: 230px; padding: 12px 14px;
+              background: var(--panel); border: 1px solid var(--line);
+              border-radius: 10px; box-shadow: 0 10px 30px #00000070; }
+  #ereadPop.on { display: block; }
+  #ereadPop .fld { margin-bottom: 10px; }
+  #ereadPop .fld:last-child { margin-bottom: 0; }
+  #ereadPop label { font-size: 12px; color: var(--dim); display: block;
+                    margin-bottom: 4px; }
+  #ereadPop select, #ereadPop input[type="text"] { width: 100%; }
+  #ereadPop input[type="range"] { width: 100%; }
   #docbar .title {
     font-weight: 600; max-width: 60vw;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -201,6 +214,10 @@
               min-height: 120px; }
   .echapter h1, .echapter h2, .echapter h3 { line-height: 1.4;
               margin: .8em 0 .5em; }
+  .echapter h4, .echapter h5, .echapter h6 { line-height: 1.5;
+              margin: .7em 0 .4em; font-weight: 650; }
+  /* calibre 等转换器用 class 而非 b/strong 表达粗体 */
+  .echapter .bold { font-weight: 700; }
   .echapter p { margin: 0 0 .9em; text-align: justify; }
   .echapter img { max-width: 100%; height: auto; display: block;
               margin: 12px auto; min-height: 0; background: transparent; }

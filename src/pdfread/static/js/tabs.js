@@ -126,6 +126,7 @@ async function closeTab(id) {
     } else {
       INFO = null;
       sessionStorage.removeItem("pdfread.doc");
+      syncEreadBtn();
       $("#docTitle").textContent = "未加载 PDF";
       $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
       left.innerHTML = "";
