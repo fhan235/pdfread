@@ -3,7 +3,24 @@ const PREF_KEY = "pdfread.prefs";
 let prefs = { theme: "dark", font: "15", layout: "side", layoutPrev: "side",
               expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340,
-              toc: false, efont: 16, eline: 1.9 };
+              toc: false, efont: 16, eline: 1.9, efontFam: "serif",
+              efontCustom: "" };
+
+/* 书籍(EPUB/TXT)字体预设 */
+const EFONT_STACKS = {
+  serif: 'Georgia, "Songti SC", "SimSun", serif',
+  sans: '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
+  kai: '"Kaiti SC", "STKaiti", "KaiTi", serif',
+  fangsong: '"FangSong", "STFangsong", "FangSong_GB2312", serif',
+};
+function ebookFont() {
+  if (prefs.efontFam === "custom") {
+    // 用户输入的系统字体名, 过滤引号/分号防 CSS 注入
+    const name = (prefs.efontCustom || "").replace(/[;{}<>"]/g, "").trim();
+    if (name) return `"${name}", serif`;
+  }
+  return EFONT_STACKS[prefs.efontFam] || EFONT_STACKS.serif;
+}
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
@@ -86,6 +103,14 @@ function applyPrefs() {
   document.documentElement.style.setProperty("--rfs", prefs.font + "px");
   document.documentElement.style.setProperty("--efs", (prefs.efont || 16) + "px");
   document.documentElement.style.setProperty("--elh", prefs.eline || 1.9);
+  document.documentElement.style.setProperty("--eff", ebookFont());
+  const eff = $("#efontFamily");
+  if (eff) eff.value = prefs.efontFam || "serif";
+  const efc = $("#efontCustom");
+  if (efc) {
+    efc.value = prefs.efontCustom || "";
+    efc.style.display = prefs.efontFam === "custom" ? "" : "none";
+  }
   const ef = $("#efontRange");
   if (ef) ef.value = prefs.efont || 16;
   const efv = $("#efontVal");
@@ -465,6 +490,18 @@ $("#elineRange").addEventListener("input", (e) => {
   $("#elineVal").textContent = prefs.eline;
 });
 $("#elineRange").addEventListener("change", () => { savePrefs(); });
+
+/* 书籍字体: 预设/自定义 */
+$("#efontFamily").onchange = (e) => {
+  prefs.efontFam = e.target.value;
+  savePrefs();
+  applyPrefs();
+};
+$("#efontCustom").addEventListener("change", (e) => {
+  prefs.efontCustom = e.target.value;
+  savePrefs();
+  applyPrefs();
+});
 
 /* PDF 缩放(60%–250%): 放大后按新宽度重取高清图; 划线按百分比定位, 不错位 */
 /* 放大超出栏宽时 margin:auto 会失效(内容贴左溢出), 需要把横向滚动位置置中 */

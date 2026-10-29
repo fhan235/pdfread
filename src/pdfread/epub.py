@@ -70,18 +70,33 @@ def _text_of(tag) -> str:
     return _WS.sub(" ", tag.get_text(" ", strip=True)).strip()
 
 
+# 出版商常用 class 名暗示标题(其样式表被剥离后, 标题会退化成普通段落)
+_HEADING_CLS = re.compile(
+    r"(?i)(?:^|[\s_-])(?:chapter[\s_-]*(?:title|heading|name)|title|heading|h[1-6])"
+    r"(?:$|[\s_-])"
+)
+
+
 def _sanitize(soup, base: str) -> str:
-    """净化章节内容: 去脚本/事件/内联样式/外链, 图片重写到包内资源端点。"""
+    """净化章节内容: 去脚本/事件/内联样式, 图片重写到包内资源端点。
+
+    class 保留(仅字符串, 便于标题启发式识别); id 清除(防与应用内
+    #left 等查询冲突); style 清除(可含 url() 外发请求/fixed 覆盖层)。
+    """
+    # 标题启发式: 类名含 title/heading/h1-6 等的短 p/div 提升为 h2
+    for tag in soup.find_all(["p", "div"]):
+        cls = " ".join(tag.get("class") or [])
+        if cls and _HEADING_CLS.search(cls) and 0 < len(_text_of(tag)) <= 80:
+            tag.name = "h2"
     for tag in soup.find_all(["script", "style", "link", "meta", "iframe",
                               "object", "embed", "form", "input", "button",
                               "audio", "video"]):
         tag.decompose()
     for tag in soup.find_all(True):
-        # 事件属性、内联样式、class/id 全部清除:
-        # style 可含 url() 外发请求或 fixed 覆盖层; class/id 可能撞应用自身样式
+        # 事件属性、内联样式、id 清除
         for attr in list(tag.attrs):
             la = attr.lower()
-            if la.startswith("on") or la in ("style", "class", "id"):
+            if la.startswith("on") or la in ("style", "id"):
                 del tag[attr]
         for attr in ("href", "src"):
             val = tag.get(attr)
@@ -92,12 +107,17 @@ def _sanitize(soup, base: str) -> str:
         elif tag.name == "img":
             src = tag.get("src", "")
             if not src:
+                # srcset 兜底: 取第一个候选
+                srcset = tag.get("srcset", "")
+                if srcset:
+                    src = srcset.split(",")[0].strip().split(" ")[0]
+                    tag["src"] = src
+                    del tag["srcset"]
+            if not src:
                 tag.decompose()
             elif re.match(r"(?i)\s*https?://", src):
                 # 外链图片(追踪/泄漏风险)替换为占位说明
-                ph = soup.new_tag("span")
-                ph.string = "[外链图片已省略]"
-                tag.replace_with(ph)
+                tag.replace_with("[外链图片已省略]")
             else:
                 tag["src"] = "__EPUB_RES__" + posixpath.normpath(
                     posixpath.join(base, src))

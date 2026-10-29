@@ -241,6 +241,19 @@
         <label class="chk"><input type="checkbox" id="cbItalic" />
           原文用斜体显示</label>
         <div class="fld">
+          <label>书籍字体（EPUB / TXT）</label>
+          <select id="efontFamily">
+            <option value="serif">衬线（宋体系）</option>
+            <option value="sans">黑体（无衬线）</option>
+            <option value="kai">楷体</option>
+            <option value="fangsong">仿宋</option>
+            <option value="custom">自定义…</option>
+          </select>
+          <input id="efontCustom" type="text" autocomplete="off"
+                 placeholder="输入系统字体名，如 LXGW WenKai"
+                 style="display:none;margin-top:6px" />
+        </div>
+        <div class="fld">
           <label>书籍字号（EPUB / TXT）<span class="fv" id="efontVal">16</span></label>
           <input id="efontRange" type="range" min="13" max="24" step="0.5" value="16" />
         </div>
