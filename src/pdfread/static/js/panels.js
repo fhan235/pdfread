@@ -181,31 +181,51 @@ async function qaSend() {
 $("#btnQA").onclick = toggleQA;
 $("#qaSend").onclick = qaSend;
 
-/* 问答模型: 独立于翻译模型, 按服务记忆; 留空则与翻译模型一致 */
+/* 问答模型: 独立于翻译模型, 按服务记忆; 选「默认」则与翻译模型一致 */
 async function loadQaModel() {
   try {
     const d = await (await fetch("/api/settings")).json();
     const it = (d.items || []).find((x) => x.provider === d.current);
     if (!it) return;
-    const inp = $("#qaModel");
-    inp.value = it.qa_model || "";
-    inp.placeholder = "默认: " + (it.custom_model || it.model);
-    $("#qaModelList").innerHTML = (it.models || [])
-      .map((m) => `<option value="${esc(m)}">`).join("");
+    const sel = $("#qaModelSel"), inp = $("#qaModel");
+    const models = it.models || [];
+    const qa = it.qa_model || "";
+    sel.innerHTML = `<option value="">默认: ${esc(it.custom_model || it.model)}</option>`
+      + models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")
+      + `<option value="__custom__">自定义…</option>`;
+    if (qa && !models.includes(qa)) {
+      sel.value = "__custom__";
+      inp.style.display = "";
+      inp.value = qa;
+    } else {
+      sel.value = qa;
+      inp.style.display = "none";
+      inp.value = "";
+    }
   } catch (e) { /* 设置读取失败时保持现状 */ }
 }
+async function saveQaModel() {
+  const sel = $("#qaModelSel");
+  const v = sel.value === "__custom__" ? $("#qaModel").value.trim() : sel.value;
+  try {
+    const r = await libPost("/api/settings", { qa_model: v });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    $("#qaHint").textContent = "问答模型已保存";
+  } catch (e) {
+    $("#qaHint").textContent = "模型保存失败：" + e;
+  }
+}
+$("#qaModelSel").addEventListener("change", () => {
+  const custom = $("#qaModelSel").value === "__custom__";
+  const inp = $("#qaModel");
+  inp.style.display = custom ? "" : "none";
+  if (custom) { inp.focus(); return; }   // 等输入框 change 时再保存
+  saveQaModel();
+});
 let qaModelSaveTimer = null;
 $("#qaModel").addEventListener("change", () => {
   clearTimeout(qaModelSaveTimer);
-  qaModelSaveTimer = setTimeout(async () => {
-    try {
-      const r = await libPost("/api/settings", { qa_model: $("#qaModel").value.trim() });
-      if (!r.ok) throw new Error((await r.json()).detail || r.status);
-      $("#qaHint").textContent = "问答模型已保存";
-    } catch (e) {
-      $("#qaHint").textContent = "模型保存失败：" + e;
-    }
-  }, 300);
+  qaModelSaveTimer = setTimeout(saveQaModel, 300);
 });
 loadQaModel();
 

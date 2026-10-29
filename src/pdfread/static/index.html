@@ -107,9 +107,9 @@
 <aside id="qaPanel">
   <div id="qaHint"></div>
   <div class="qatools">
-    <input id="qaModel" list="qaModelList" placeholder="默认模型"
-           title="问答/速读使用的模型，留空则与翻译模型一致" />
-    <datalist id="qaModelList"></datalist>
+    <select id="qaModelSel" title="问答/速读使用的模型，默认与翻译模型一致"></select>
+    <input id="qaModel" placeholder="自定义模型名" style="display:none"
+           title="输入自定义模型名，失焦自动保存" />
     <button id="btnSum" class="ghost" title="生成全文的结构化速读摘要（缓存，重开免费）">✦ 速读摘要</button>
   </div>
   <div id="qaList"></div>
@@ -175,10 +175,10 @@
           <select id="cfgProvider"></select>
         </div>
         <div class="fld">
-          <label>模型（留空用默认）</label>
+          <label>模型</label>
+          <select id="cfgModelSel"></select>
           <input id="cfgModel" type="text" autocomplete="off"
-                 placeholder="默认模型" list="cfgModelList" />
-          <datalist id="cfgModelList"></datalist>
+                 placeholder="输入自定义模型名" style="display:none;margin-top:6px" />
         </div>
         <div class="fld">
           <label>API Key</label>

@@ -157,12 +157,22 @@ async function openCfg() {
 function syncCfgHint() {
   const it = (CFG?.items || []).find((x) => x.provider === $("#cfgProvider").value);
   const h = $("#cfgHint"), inp = $("#cfgKey");
-  // 模型可自定义, 留空回落到该服务的预设默认模型
-  const mi = $("#cfgModel");
-  mi.value = it?.custom_model || "";
-  mi.placeholder = it ? `默认: ${it.model}` : "默认模型";
-  $("#cfgModelList").innerHTML = (it?.models || [])
-    .map((m) => `<option value="${esc(m)}">`).join("");
+  // 模型: 下拉选择预设候选, 选「自定义…」时出现输入框; 空值回落到默认模型
+  const sel = $("#cfgModelSel"), mi = $("#cfgModel");
+  const models = it?.models || [];
+  const custom = it?.custom_model || "";
+  sel.innerHTML = `<option value="">默认: ${esc(it?.model || "")}</option>`
+    + models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")
+    + `<option value="__custom__">自定义…</option>`;
+  if (custom && !models.includes(custom)) {
+    sel.value = "__custom__";
+    mi.style.display = "";
+    mi.value = custom;
+  } else {
+    sel.value = custom;
+    mi.style.display = "none";
+    mi.value = "";
+  }
   if (!it) { h.textContent = ""; return; }
   inp.value = "";
   if (!it.needs_key) {
@@ -186,9 +196,22 @@ function syncCfgHint() {
   }
 }
 
+$("#cfgModelSel").addEventListener("change", () => {
+  const custom = $("#cfgModelSel").value === "__custom__";
+  const mi = $("#cfgModel");
+  mi.style.display = custom ? "" : "none";
+  if (custom) mi.focus();
+});
+
+/* 取当前选择的模型名: 下拉值, 自定义时取输入框 */
+function cfgModelValue() {
+  const sel = $("#cfgModelSel");
+  return sel.value === "__custom__" ? $("#cfgModel").value.trim() : sel.value;
+}
+
 async function saveCfg() {
   const body = { provider: $("#cfgProvider").value,
-                 model: $("#cfgModel").value.trim() };
+                 model: cfgModelValue() };
   const k = $("#cfgKey").value.trim();
   if (k) body.key = k;
   $("#cfgHint").textContent = "保存中…";
