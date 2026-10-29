@@ -79,8 +79,14 @@ jobs:
           xattr -cr "dist/pdfread.app" || true
           mkdir -p dmg && cp -R "dist/pdfread.app" dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname "pdfread" -srcfolder dmg -ov -format UDZO \
-            "pdfread-${{ matrix.name }}.dmg"
+          # hdiutil 偶发 Resource busy(系统服务短暂占用卷), 先卸残留卷再重试
+          hdiutil detach /Volumes/pdfread 2>/dev/null || true
+          for i in 1 2 3 4; do
+            hdiutil create -volname "pdfread" -srcfolder dmg -ov -format UDZO \
+              "pdfread-${{ matrix.name }}.dmg" && break
+            echo "hdiutil 第 $i 次失败, 3 秒后重试"
+            sleep 3
+          done
 
       # ---------- Linux: 打包成 tar.gz ----------
       - name: Package (Linux)
