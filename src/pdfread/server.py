@@ -56,13 +56,31 @@ def _executor():
     return _pool
 
 
+def _close_pool() -> None:
+    """关闭进程池并确保 worker 退出。
+
+    shutdown(wait=True) 会等正在执行的任务结束; worker 卡住时
+    (大文件解析 / PyMuPDF 在 C 层阻塞) 会无限等待, 退出后进程残留。
+    这里只取消排队任务, 再给存活 worker 发 terminate,
+    保证退出路径确定性完成, 不被任务拖住。
+    """
+    global _pool
+    pool, _pool = _pool, None
+    if pool is None:
+        return
+    pool.shutdown(wait=False, cancel_futures=True)
+    for proc in (getattr(pool, "_processes", None) or {}).values():
+        try:
+            if proc.is_alive():
+                proc.terminate()
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app):
     yield
-    global _pool
-    if _pool is not None:
-        _pool.shutdown(wait=True, cancel_futures=True)
-        _pool = None
+    await asyncio.to_thread(_close_pool)
     if STATE["cache"] is not None:
         STATE["cache"].close()
         STATE["cache"] = None
@@ -1087,17 +1105,16 @@ async def raw_pdf(doc: str = "") -> FileResponse:
 async def shutdown() -> dict:
     """退出应用。
 
-    先返回响应, 再关闭进程池(等 worker 退出, 避免 macOS 上留下
-    带 Dock 图标的孤儿进程), 最后退出。
+    先返回响应, 再强制回收进程池(worker 卡住也不能拖住退出),
+    最后退出。os._exit 放在 finally, 任何清理异常都不能阻止退出。
     """
 
     async def stop() -> None:
-        global _pool
-        await asyncio.sleep(0.4)
-        pool, _pool = _pool, None
-        if pool is not None:
-            await asyncio.to_thread(pool.shutdown, True, cancel_futures=True)
-        os._exit(0)
+        try:
+            await asyncio.sleep(0.4)
+            _close_pool()
+        finally:
+            os._exit(0)
 
     asyncio.create_task(stop())
     return {"ok": True, "message": "服务即将退出"}
