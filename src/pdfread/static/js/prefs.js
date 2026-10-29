@@ -13,13 +13,75 @@ function savePrefs() {
   localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
 }
 const THEME_ORDER = ["dark", "light", "paper", "green"];
-const THEME_NAMES = { dark: "深色", light: "浅色", paper: "纸张", green: "护眼" };
+const THEME_NAMES = { dark: "深色", light: "浅色", paper: "纸张", green: "护眼",
+                      custom: "自定义" };
+/* 自定义主题可调的 8 个配色变量 */
+const THEME_VARS = ["bg", "panel", "line", "fg", "dim", "accent", "ok", "warn"];
+const VAR_NAMES = { bg: "背景", panel: "面板", line: "边框", fg: "文字",
+                    dim: "次要文字", accent: "强调色", ok: "成功", warn: "警告" };
+
+/* 按背景亮度决定自定义主题套用深色还是浅色的组件适配 */
+function isLightColor(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+  return lum > 140;
+}
+
+function applyCustomTheme() {
+  const custom = prefs.theme === "custom";
+  // 首次进入自定义: 以当前主题为底版, 快照一份配色再改
+  if (custom && !prefs.themeCustom) {
+    const cs = getComputedStyle(document.body);
+    prefs.themeCustom = {};
+    for (const v of THEME_VARS)
+      prefs.themeCustom[v] = cs.getPropertyValue("--" + v).trim() || "#888888";
+    savePrefs();
+  }
+  for (const v of THEME_VARS) document.body.style.removeProperty("--" + v);
+  if (custom) {
+    for (const [k, val] of Object.entries(prefs.themeCustom || {}))
+      if (THEME_VARS.includes(k)) document.body.style.setProperty("--" + k, val);
+  }
+  const grid = $("#themeGrid");
+  if (grid) grid.style.display = custom ? "" : "none";
+  return custom;
+}
+
+function buildThemeGrid() {
+  const grid = $("#themeGrid .clrgrid");
+  if (!grid) return;
+  grid.innerHTML = THEME_VARS.map((v) =>
+    `<label>${VAR_NAMES[v]}<input type="color" data-var="${v}"></label>`
+  ).join("");
+  grid.querySelectorAll("input").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      prefs.themeCustom[inp.dataset.var] = inp.value;
+      document.body.style.setProperty("--" + inp.dataset.var, inp.value);
+    });
+    inp.addEventListener("change", savePrefs);
+  });
+}
+
+function syncThemeGrid() {
+  document.querySelectorAll("#themeGrid input[data-var]").forEach((inp) => {
+    const v = prefs.themeCustom?.[inp.dataset.var];
+    if (/^#[0-9a-f]{6}$/i.test(v || "")) inp.value = v;
+  });
+}
 
 function applyPrefs() {
+  // 先快照/应用自定义配色(需在切换 class 之前读取当前主题的变量值)
+  const customTheme = applyCustomTheme();
   // paper / green 属于浅色体系: 复用 body.light 的组件适配, 只换配色变量
-  document.body.classList.toggle("light", prefs.theme !== "dark");
-  document.body.classList.toggle("theme-paper", prefs.theme === "paper");
-  document.body.classList.toggle("theme-green", prefs.theme === "green");
+  // 自定义主题按背景亮度决定套用深色还是浅色的组件适配
+  document.body.classList.toggle("light", customTheme
+    ? isLightColor(prefs.themeCustom?.bg) : prefs.theme !== "dark");
+  document.body.classList.toggle("theme-paper",
+    !customTheme && prefs.theme === "paper");
+  document.body.classList.toggle("theme-green",
+    !customTheme && prefs.theme === "green");
   document.body.classList.toggle("italic-src", !!prefs.italicSrc);
   document.documentElement.style.setProperty("--rfs", prefs.font + "px");
   const m = document.querySelector("main");
@@ -44,6 +106,7 @@ function applyPrefs() {
   const zv = $("#zoomVal");
   if (zv) zv.textContent = Math.round((prefs.zoom || 1) * 100) + "%";
   syncSeg("segTheme", prefs.theme);
+  if (customTheme) syncThemeGrid();
   syncSeg("segFont", prefs.font);
   syncSeg("segLayout", prefs.layout);
   syncSeg("segExpFmt", prefs.expFmt);
@@ -414,7 +477,16 @@ window.addEventListener("wheel", (e) => {
 $("#btnExport").onclick = doExport;
 $("#btnExp").onclick = doExport;
 
+/* 恢复默认: 清掉自定义配色, 以深色主题为底版重新快照 */
+$("#btnThemeReset").onclick = () => {
+  for (const v of THEME_VARS) document.body.style.removeProperty("--" + v);
+  prefs.themeCustom = null;
+  savePrefs();
+  applyPrefs();
+};
+
 /* 启动: 先恢复阅读偏好, 再加载 */
+buildThemeGrid();
 loadPrefs();
 applyPrefs();
 segInit("segTheme", "theme");
