@@ -24,6 +24,9 @@ IS_WIN = sys.platform == "win32"
 
 # 前端资源必须打进去, 运行时通过 sys._MEIPASS 定位
 datas = [(str(BASE / "src" / "pdfread" / "static"), "pdfread/static")]
+# 窗口/任务栏图标(运行时按平台取 ico/png)
+datas += [(str(BASE / "assets" / "icon.ico"), "assets"),
+          (str(BASE / "assets" / "icon.png"), "assets")]
 # pywebview 的 js 资产与平台后端
 datas += collect_data_files("webview")
 

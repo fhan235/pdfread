@@ -15,6 +15,24 @@ from pathlib import Path
 APP_NAME = "pdfread"
 
 
+def asset_icon() -> Path | None:
+    """应用图标文件路径(Windows 用 .ico, 其余用 .png); 不存在则返回 None。
+
+    兼容源码运行与 PyInstaller 打包(_MEIPASS)两种场景。
+    """
+    name = "icon.ico" if sys.platform == "win32" else "icon.png"
+    meipass = getattr(sys, "_MEIPASS", None)
+    candidates = []
+    if meipass:
+        candidates += [Path(meipass) / "assets" / name]
+    candidates.append(Path(__file__).resolve().parent.parent.parent
+                      / "assets" / name)
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
 def static_dir() -> Path:
     """前端静态资源目录。"""
     # PyInstaller 打包后资源被解压到 _MEIPASS

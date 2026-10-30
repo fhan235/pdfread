@@ -136,14 +136,39 @@ def _run_native_window(url: str) -> bool:
     except Exception:
         return False
     try:
-        webview.create_window(
-            "pdfread",
-            url,
-            width=1440,
-            height=900,
-            min_size=(960, 600),
-            text_select=True,
-        )
+        # Windows: 设置 AppUserModelID, 任务栏才会用打包 exe 的图标
+        # 并正确归组(否则显示 WebView 默认图标)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "io.github.fhan235.pdfread")
+            except Exception:
+                pass
+        kwargs = {}
+        try:
+            from .paths import asset_icon
+            icon = asset_icon()
+            if icon:
+                kwargs["icon"] = str(icon)   # pywebview 6.x 支持窗口图标
+        except Exception:
+            pass
+        try:
+            webview.create_window(
+                "pdfread",
+                url,
+                width=1440,
+                height=900,
+                min_size=(960, 600),
+                text_select=True,
+                **kwargs,
+            )
+        except TypeError:
+            # 旧版 pywebview 不支持 icon 参数
+            webview.create_window(
+                "pdfread", url, width=1440, height=900,
+                min_size=(960, 600), text_select=True,
+            )
         webview.start()
         return True
     except Exception:
