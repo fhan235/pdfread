@@ -259,6 +259,44 @@ def _write_runtime(port: int) -> None:
         pass
 
 
+def _replace_dir(newdir: Path, target: Path, windows: bool) -> None:
+    """把 newdir 的内容替换进 target。
+
+    Windows 上正在使用中的文件(本更新器自身加载的 exe/DLL)不能覆盖,
+    但同卷内可以重命名: 先把旧文件整体移进 target/_old_<ts>/,
+    再拷入新文件; 失败时移回回滚。_old_ 目录由下次更新时清理。
+    """
+    import shutil
+    if not windows:
+        shutil.copytree(newdir, target, dirs_exist_ok=True)
+        return
+    for d in target.glob("_old_*"):
+        shutil.rmtree(d, ignore_errors=True)   # 上次更新的旧文件, 已不被占用
+    old = target / f"_old_{int(time.time())}"
+    old.mkdir()
+    moved = []
+    try:
+        for item in list(target.iterdir()):
+            if item == old or item.name.startswith("_old_"):
+                continue
+            shutil.move(str(item), str(old / item.name))
+            moved.append(item.name)
+        shutil.copytree(newdir, target, dirs_exist_ok=True)
+    except Exception:
+        # 回滚: 新文件清掉, 旧文件移回
+        for item in list(target.iterdir()):
+            if item == old or item.name.startswith("_old_"):
+                continue
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+        for item in list(old.iterdir()):
+            shutil.move(str(item), str(target / item.name))
+        shutil.rmtree(old, ignore_errors=True)
+        raise
+
+
 def run_updater(pkg: Path, pid: int) -> None:
     """以独立进程运行的更新器: 等主进程退出 -> 替换 -> 重启。
 
@@ -313,14 +351,14 @@ def run_updater(pkg: Path, pid: int) -> None:
                 with zipfile.ZipFile(pkg) as zf:
                     zf.extractall(tmp)
                 step("zip extracted")
-                shutil.copytree(tmp, target, dirs_exist_ok=True)
+                _replace_dir(tmp, target, windows=True)
                 step("files copied")
             else:
                 import tarfile
                 with tarfile.open(pkg) as tf:
                     tf.extractall(tmp)
                 step("tar extracted")
-                shutil.copytree(tmp / "pdfread", target, dirs_exist_ok=True)
+                _replace_dir(tmp / "pdfread", target, windows=False)
                 exe.chmod(0o755)
                 step("files copied")
         finally:

@@ -154,3 +154,47 @@ def test_run_updater_zip_flow(tmp_path, monkeypatch):
     assert launched and launched[0][0] == str(exe)
     log = (tmp_path / "cache" / "update" / "update.log").read_text()
     assert "tar extracted" in log and "relaunched" in log
+
+
+def test_replace_dir_windows_move_aside(tmp_path):
+    """Windows 路径: 旧文件移入 _old_ 后再拷入新文件, 新内容生效。"""
+    from pdfread.app import _replace_dir
+    target = tmp_path / "app"
+    target.mkdir()
+    (target / "pdfread.exe").write_text("old")
+    (target / "_internal").mkdir()
+    (target / "_internal" / "python312.dll").write_text("old-dll")
+    newdir = tmp_path / "new"
+    (newdir / "_internal").mkdir(parents=True)
+    (newdir / "pdfread.exe").write_text("new")
+    (newdir / "_internal" / "python312.dll").write_text("new-dll")
+    _replace_dir(newdir, target, windows=True)
+    assert (target / "pdfread.exe").read_text() == "new"
+    assert (target / "_internal" / "python312.dll").read_text() == "new-dll"
+    olds = list(target.glob("_old_*"))
+    assert olds and (olds[0] / "pdfread.exe").read_text() == "old"
+
+
+def test_replace_dir_windows_rollback_on_failure(tmp_path, monkeypatch):
+    """拷贝失败时旧文件移回原位, 安装目录不残破。"""
+    import shutil
+    from pdfread import app as appmod
+    target = tmp_path / "app"
+    target.mkdir()
+    (target / "pdfread.exe").write_text("old")
+    newdir = tmp_path / "new"
+    newdir.mkdir()
+    (newdir / "pdfread.exe").write_text("new")
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(shutil, "copytree", boom)
+    try:
+        _replace_dir = appmod._replace_dir
+        import pytest as _pytest
+        with _pytest.raises(OSError):
+            _replace_dir(newdir, target, windows=True)
+    finally:
+        pass
+    assert (target / "pdfread.exe").read_text() == "old"
+    assert not (target / "pdfread.exe").read_text() == "new"
