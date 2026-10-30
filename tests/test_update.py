@@ -38,3 +38,30 @@ def test_download_rejects_when_no_update(client, monkeypatch):
                         {"ts": 1e18, "data": {"current": "0.9.4", "newer": False}})
     r = client.post("/api/update/download")
     assert r.status_code == 400
+
+
+class _FakeResp:
+    def __init__(self, location=""):
+        self.headers = {"location": location}
+
+
+class _FakeClient:
+    async def get(self, url, **kw):
+        return _FakeResp(
+            f"https://github.com/{server._UPDATE_REPO}/releases/tag/v0.9.9")
+
+
+@pytest.mark.anyio
+async def test_fallback_latest_from_redirect(monkeypatch):
+    monkeypatch.setattr(server.sys, "platform", "win32")
+    fb = await server._fallback_latest(_FakeClient())
+    assert fb["latest"] == "0.9.9"
+    assert fb["asset_url"].endswith("/releases/download/v0.9.9/pdfread-windows-x64.zip")
+
+
+@pytest.mark.anyio
+async def test_fallback_latest_bad_location(monkeypatch):
+    class Bad:
+        async def get(self, url, **kw):
+            return _FakeResp("https://github.com/login")
+    assert await server._fallback_latest(Bad()) is None

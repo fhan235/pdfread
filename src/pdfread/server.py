@@ -1122,15 +1122,48 @@ def _ver_tuple(v: str) -> tuple:
         return (0,)
 
 
+def _asset_name() -> str:
+    """当前平台对应的安装包文件名。"""
+    return ("pdfread-windows-x64.zip" if sys.platform == "win32"
+            else "pdfread-macos-arm64.dmg" if sys.platform == "darwin"
+            else "pdfread-linux-x64.tar.gz")
+
+
 def _pick_asset(assets: list) -> dict | None:
     """按当前平台挑选安装包。"""
-    want = ("windows-x64.zip" if sys.platform == "win32"
-            else "macos-arm64.dmg" if sys.platform == "darwin"
-            else "linux-x64.tar.gz")
+    want = _asset_name()
     for a in assets:
         if isinstance(a, dict) and str(a.get("name", "")).endswith(want):
             return a
     return None
+
+
+async def _fallback_latest(client) -> dict | None:
+    """API 限流时的回退: 经 releases/latest 的 302 跳转拿最新版本号。
+
+    该端点属于网页端, 不占 API 配额。拿不到 Release 说明,
+    安装包地址按命名规律拼接。
+    """
+    try:
+        r = await client.get(
+            f"https://github.com/{_UPDATE_REPO}/releases/latest",
+            follow_redirects=False)
+    except Exception:
+        return None
+    m = re.search(r"/tag/v?([0-9][0-9A-Za-z.\-]*)\s*$",
+                  r.headers.get("location", ""))
+    if not m:
+        return None
+    latest = m.group(1)
+    name = _asset_name()
+    return {
+        "latest": latest,
+        "notes": "",
+        "page_url": f"https://github.com/{_UPDATE_REPO}/releases/tag/v{latest}",
+        "asset_name": name,
+        "asset_url": f"https://github.com/{_UPDATE_REPO}/releases/download"
+                     f"/v{latest}/{name}",
+    }
 
 
 async def _latest_release(force: bool = False) -> dict:
@@ -1159,6 +1192,15 @@ async def _latest_release(force: bool = False) -> dict:
                 "asset_name": asset and asset.get("name") or "",
                 "asset_url": asset and asset.get("browser_download_url") or "",
             })
+        elif r.status_code in (403, 429):
+            # 未认证 API 按出口 IP 限流(60 次/小时), 代理/VPN 共享 IP 极易触顶
+            fb = await _fallback_latest(client)
+            if fb:
+                fb["newer"] = _ver_tuple(fb["latest"]) > _ver_tuple(__version__)
+                fb["fallback"] = True
+                data.update(fb)
+            else:
+                data["error"] = "GitHub API 限流（共享代理 IP 易触顶），请稍后重试"
         else:
             data["error"] = f"HTTP {r.status_code}"
     except Exception as exc:
