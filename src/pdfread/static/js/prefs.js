@@ -236,6 +236,8 @@ let CFG = null;
 
 async function openCfg() {
   $("#cfg").classList.add("on");
+  if (UPDATE && UPDATE.current)
+    $("#verNow").textContent = "版本 v" + UPDATE.current;
   $("#cfgHint").textContent = "加载中…";
   $("#cfgHint").className = "hint";
   loadParse();
@@ -577,7 +579,7 @@ async function checkUpdate(force) {
     btn.style.display = "none";
   }
 }
-$("#btnUpdate").onclick = () => {
+function openUpdateDialog() {
   if (!UPDATE || !UPDATE.newer) return;
   $("#updVer").textContent = `v${UPDATE.latest}`;
   $("#updNotes").textContent = UPDATE.notes || "（无更新说明）";
@@ -585,7 +587,8 @@ $("#btnUpdate").onclick = () => {
   h.textContent = `当前版本 v${UPDATE.current}`;
   h.className = "hint";
   $("#upd").classList.add("on");
-};
+}
+$("#btnUpdate").onclick = openUpdateDialog;
 $("#updClose").onclick = () => $("#upd").classList.remove("on");
 $("#upd").addEventListener("click", (e) => {
   if (e.target.id === "upd") $("#upd").classList.remove("on");
@@ -597,6 +600,27 @@ $("#updSkip").onclick = () => {
   $("#btnUpdate").style.display = "none";
 };
 $("#updPage").onclick = () => window.open(UPDATE.page_url, "_blank");
+
+/* 手动检查更新: 强制刷新(忽略 6 小时缓存); 即使之前忽略过该版本也照样弹窗 */
+$("#btnCheckUpd").onclick = async () => {
+  const h = $("#updCheckHint");
+  h.textContent = "正在检查更新…";
+  h.className = "hint";
+  await checkUpdate(true);
+  if (!UPDATE || (!UPDATE.latest && UPDATE.error)) {
+    h.textContent = "检查失败：" + ((UPDATE && UPDATE.error) || "网络错误");
+    h.className = "hint bad";
+    return;
+  }
+  $("#verNow").textContent = "版本 v" + (UPDATE.current || "?");
+  if (UPDATE.newer) {
+    h.textContent = "";
+    openUpdateDialog();
+  } else {
+    h.textContent = `已是最新版本（v${UPDATE.current}）`;
+    h.className = "hint ok";
+  }
+};
 $("#updDl").onclick = async () => {
   const h = $("#updHint");
   if (!UPDATE.asset_url) {
