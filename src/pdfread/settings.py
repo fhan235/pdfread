@@ -102,6 +102,22 @@ def get_provider() -> str:
     return str(load().get("provider", "")).strip()
 
 
+def get_proxy() -> str:
+    """手动设置的更新代理(强制代理/PAC 环境下自动探测不到时用)。"""
+    return str(load().get("proxy", "")).strip()
+
+
+def set_proxy(value: str) -> None:
+    with _LOCK:
+        data = load()
+        value = (value or "").strip()
+        if value:
+            data["proxy"] = value
+        else:
+            data.pop("proxy", None)
+        save(data)
+
+
 def set_provider(name: str) -> None:
     update_translation(name)
 

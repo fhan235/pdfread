@@ -83,3 +83,18 @@ def test_pagehide_watchdog_arm_and_cancel(client):
         assert hb["kill_at"] == 0.0 and hb["last"] > 0
     finally:
         hb.update(saved)
+
+
+def test_proxy_setting_roundtrip(client):
+    r = client.post("/api/settings", json={"proxy": "http://127.0.0.1:7890"})
+    assert r.status_code == 200
+    s = client.get("/api/settings").json()
+    assert s["proxy"] == "http://127.0.0.1:7890"
+    assert server._update_proxy() == "http://127.0.0.1:7890"
+    # 非法格式被拒
+    r = client.post("/api/settings", json={"proxy": "127.0.0.1:7890"})
+    assert r.status_code == 400
+    # 清空
+    r = client.post("/api/settings", json={"proxy": ""})
+    assert r.status_code == 200
+    assert client.get("/api/settings").json()["proxy"] == ""

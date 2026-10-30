@@ -251,6 +251,8 @@ async function openCfg() {
   $("#cfgProvider").innerHTML = CFG.items.map((it) =>
     `<option value="${esc(it.provider)}"${it.provider === CFG.current ? " selected" : ""}>`
     + `${esc(it.provider)} — ${esc(it.model)}</option>`).join("");
+  const cp = $("#cfgProxy");
+  if (cp && !cp.value) cp.value = CFG.proxy || "";
   syncCfgHint();
 }
 
@@ -600,6 +602,22 @@ $("#updSkip").onclick = () => {
   $("#btnUpdate").style.display = "none";
 };
 $("#updPage").onclick = () => window.open(UPDATE.page_url, "_blank");
+
+$("#btnProxySave").onclick = async () => {
+  const h = $("#updCheckHint");
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proxy: $("#cfgProxy").value.trim() }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    h.textContent = "代理已保存，立即生效";
+    h.className = "hint ok";
+  } catch (e) {
+    h.textContent = "保存失败：" + e;
+    h.className = "hint bad";
+  }
+};
 
 /* 手动检查更新: 强制刷新(忽略 6 小时缓存); 即使之前忽略过该版本也照样弹窗 */
 $("#btnCheckUpd").onclick = async () => {

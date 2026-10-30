@@ -672,7 +672,7 @@ async def upload(file: UploadFile = File(...), skip_references: bool = True) -> 
 @app.get("/api/settings")
 async def get_settings() -> dict:
     """返回可配置项与各服务密钥的"是否已配置"状态(不返回密钥内容)。"""
-    from .settings import configured, profile
+    from .settings import configured, get_proxy, profile
 
     done = configured()
     items = []
@@ -694,14 +694,24 @@ async def get_settings() -> dict:
             "from_env": bool(env and os.environ.get(env, "").strip()),
         })
     cfg: TransConfig | None = STATE["cfg"]
-    return {"current": cfg.provider if cfg else "", "items": items}
+    return {"current": cfg.provider if cfg else "", "items": items,
+            "proxy": os.environ.get("PDFREAD_PROXY", "").strip() or get_proxy(),
+            "proxy_from_env": bool(os.environ.get("PDFREAD_PROXY", "").strip())}
 
 
 @app.post("/api/settings")
 async def set_settings(payload: dict, doc: str = "") -> dict:
     """保存密钥 / 切换服务。密钥写入用户配置文件(权限 0600)。"""
-    from .settings import profile, update_translation
+    from .settings import profile, set_proxy, update_translation
     old = STATE["cfg"] or TransConfig()
+    proxy = payload.get("proxy")
+    if proxy is not None:
+        if not isinstance(proxy, str):
+            raise HTTPException(400, "设置值必须为字符串")
+        proxy = proxy.strip()
+        if proxy and not re.match(r"^https?://[^\s/]+(:\d+)?/?$", proxy):
+            raise HTTPException(400, "代理地址格式应为 http://主机:端口")
+        set_proxy(proxy)
     provider = str(payload.get("provider", old.provider)).strip()
     if provider not in PROVIDERS:
         raise HTTPException(400, "未知翻译服务")
@@ -1167,11 +1177,20 @@ async def _fallback_latest(client) -> dict | None:
 
 
 def _update_proxy() -> str | None:
-    """更新检查/下载使用的代理: 环境变量优先, 其次系统代理设置。
+    """更新检查/下载使用的代理。
 
-    httpx 只读环境变量, 打包后双击启动没有 shell 环境,
-    浏览器能开 GitHub 而应用不能, 差别就在这里。
+    优先级: PDFREAD_PROXY 环境变量 > 设置中手动保存的代理 >
+    HTTPS_PROXY 等环境变量 > 系统代理(Windows 注册表 / macOS scutil)。
+
+    注意: PAC 自动配置脚本(AutoConfigURL)无法在此解析, 该场景请手动填写代理。
     """
+    v = os.environ.get("PDFREAD_PROXY", "").strip()
+    if v:
+        return v
+    from .settings import get_proxy
+    saved = get_proxy()
+    if saved:
+        return saved
     for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
               "HTTP_PROXY", "http_proxy"):
         v = os.environ.get(k, "").strip()
@@ -1214,56 +1233,84 @@ def _update_proxy() -> str | None:
     return None
 
 
+def _update_ssl_context():
+    """优先使用操作系统证书库。
+
+    企业代理常做 TLS 审查(根证书装进了系统库), 而 Python 默认用 certifi
+    自带证书, 校验必失败。Windows 读注册表根证书, macOS 读系统钥匙串。
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        if sys.platform == "win32":
+            for store in ("ROOT", "CA"):
+                for cert in ssl.enum_certificates(store):
+                    try:
+                        ctx.load_verify_locations(cadata=cert[0])
+                    except Exception:
+                        continue
+        elif sys.platform == "darwin":
+            import subprocess
+            out = subprocess.run(
+                ["security", "find-certificate", "-a", "-p",
+                 "/System/Library/Keychains/SystemRootCertificates.keychain"],
+                capture_output=True, text=True, timeout=5).stdout
+            if out:
+                ctx.load_verify_locations(cadata=out)
+    except Exception:
+        pass
+    return ctx
+
+
 def _update_client(timeout: float = 8.0, **extra):
     import httpx
     proxy = _update_proxy()
-    kwargs = {"timeout": timeout, **extra}
+    kwargs = {"timeout": timeout, "verify": _update_ssl_context(), **extra}
     if proxy:
         kwargs["proxy"] = proxy
     return httpx.AsyncClient(**kwargs)
 
 
 async def _latest_release(force: bool = False) -> dict:
-    """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。"""
+    """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。
+
+    网页端(releases/latest 302 跳转)优先: 不占未认证 API 的限流配额;
+    API 仅用于尽力补全更新说明(被限流也不影响主流程)。
+    """
     if not force and _update_cache["data"] and \
             time.time() - _update_cache["ts"] < _UPDATE_TTL:
         return _update_cache["data"]
-    import httpx
     from . import __version__
     data = {"current": __version__, "newer": False, "error": ""}
     try:
         async with _update_client(timeout=8.0) as client:
-            r = await client.get(
-                f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
-                headers={"User-Agent": f"pdfread/{__version__}",
-                         "Accept": "application/vnd.github+json"})
-        if r.status_code == 200:
-            rel = r.json()
-            latest = str(rel.get("tag_name", "")).lstrip("v")
-            asset = _pick_asset(rel.get("assets") or [])
-            data.update({
-                "latest": latest,
-                "newer": _ver_tuple(latest) > _ver_tuple(__version__),
-                "notes": str(rel.get("body", ""))[:4000],
-                "page_url": str(rel.get("html_url", "")),
-                "asset_name": asset and asset.get("name") or "",
-                "asset_url": asset and asset.get("browser_download_url") or "",
-            })
-        elif r.status_code in (403, 429):
-            # 未认证 API 按出口 IP 限流(60 次/小时), 代理/VPN 共享 IP 极易触顶
             fb = await _fallback_latest(client)
-            if fb:
-                fb["newer"] = _ver_tuple(fb["latest"]) > _ver_tuple(__version__)
-                fb["fallback"] = True
-                data.update(fb)
+            if not fb:
+                data["error"] = ("无法访问 GitHub，请检查网络/代理"
+                                 "（强制代理环境可在设置 → 关于中手动填写代理地址）")
             else:
-                data["error"] = "GitHub API 限流，且网页端回退也失败，请检查网络/代理后重试"
-        else:
-            data["error"] = f"HTTP {r.status_code}"
+                data.update(fb)
+                data["newer"] = _ver_tuple(fb["latest"]) > _ver_tuple(__version__)
+                data["fallback"] = True
+                # 尽力用 API 补全更新说明与精确资产信息; 限流/失败均可容忍
+                try:
+                    r = await client.get(
+                        f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
+                        headers={"User-Agent": f"pdfread/{__version__}",
+                                 "Accept": "application/vnd.github+json"})
+                    if r.status_code == 200:
+                        rel = r.json()
+                        asset = _pick_asset(rel.get("assets") or [])
+                        data["notes"] = str(rel.get("body", ""))[:4000]
+                        data["fallback"] = False
+                        if asset:
+                            data["asset_name"] = asset.get("name", "")
+                            data["asset_url"] = asset.get("browser_download_url", "")
+                except Exception:
+                    pass
     except Exception as exc:
         data["error"] = (f"网络请求失败: {str(exc)[:150]}"
-                         "（浏览器能开 GitHub 而这里失败，通常是应用未走系统代理，"
-                         "可设置 HTTPS_PROXY 环境变量后重启应用）")
+                         "（强制代理环境可在设置 → 关于中手动填写代理地址）")
     _update_cache.update(ts=time.time(), data=data)
     return data
 
