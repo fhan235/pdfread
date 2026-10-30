@@ -138,6 +138,12 @@ def _set_window_icon_win32() -> None:
             return
         import ctypes
         user32 = ctypes.windll.user32
+        # 先声明 DPI 感知, 否则高分屏上按 32px 加载再放大, 任务栏图标发虚
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(
+                ctypes.c_void_p(-4))   # PER_MONITOR_AWARE_V2
+        except Exception:
+            pass
         hwnd = 0
         for _ in range(150):   # 最多等 30 秒窗口出现
             hwnd = user32.FindWindowW(None, "pdfread")
@@ -147,8 +153,11 @@ def _set_window_icon_win32() -> None:
         if not hwnd:
             return
         LR_LOADFROMFILE = 0x10
-        big = user32.LoadImageW(None, str(icon), 1, 32, 32, LR_LOADFROMFILE)
-        small = user32.LoadImageW(None, str(icon), 1, 16, 16, LR_LOADFROMFILE)
+        # SM_CXICON=11 SM_CYICON=12 SM_CXSMICON=49 SM_CYSMICON=50
+        wbig = user32.GetSystemMetrics(11)
+        wsmall = user32.GetSystemMetrics(49)
+        big = user32.LoadImageW(None, str(icon), 1, wbig, wbig, LR_LOADFROMFILE)
+        small = user32.LoadImageW(None, str(icon), 1, wsmall, wsmall, LR_LOADFROMFILE)
         if big:
             user32.SendMessageW(hwnd, 0x80, 1, big)     # WM_SETICON, ICON_BIG
         if small:
