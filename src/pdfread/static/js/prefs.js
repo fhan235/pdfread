@@ -597,7 +597,9 @@ function openUpdateDialog() {
   $("#updVer").textContent = `v${UPDATE.latest}`;
   $("#updNotes").textContent = UPDATE.notes || "（无更新说明）";
   const h = $("#updHint");
-  h.textContent = `当前版本 v${UPDATE.current}`;
+  const block = UPDATE.apply_block || "";
+  $("#updApply").style.display = block ? "none" : "";
+  h.textContent = `当前版本 v${UPDATE.current}` + (block ? `；无法一键更新：${block}` : "");
   h.className = "hint";
   $("#upd").classList.add("on");
 }
@@ -677,8 +679,8 @@ $("#updDl").onclick = async () => {
   }
 };
 
-/* 一键更新: 下载(带进度条) + 生成更新器, 确认后退出应用,
-   外部更新器替换文件并自动重启 */
+/* 一键更新: 先下载并校验(带进度条), 用户确认后才启动安装;
+   取消则什么都不会发生, 已下载的文件留着, 下次点击直接复用 */
 let updBusy = false;
 $("#updApply").onclick = async () => {
   if (updBusy) return;
@@ -708,34 +710,42 @@ $("#updApply").onclick = async () => {
     } catch (e) { /* 轮询失败忽略 */ }
   }, 400);
   try {
-    const r = await fetch("/api/update/apply?task=" + task, { method: "POST" });
+    const r = await fetch("/api/update/download?task=" + task, { method: "POST" });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const d = await r.json();
     clearInterval(timer);
     bar.style.display = "none";
-    $("#upd").classList.remove("on");
-    if (confirm(`v${d.version} 已下载完成。\n应用将退出并自动完成安装和重启。`
-                + "（配置、翻译缓存、文库、划线全部保留）\n\n现在开始更新？")) {
-      if (es) { es.close(); es = null; }
-      try { await fetch("/api/shutdown", { method: "POST" }); } catch (e) {}
-      $("#bye").classList.add("on");
-      document.title = "pdfread 更新中";
-      // 服务已退出, 此页面是静态信息页; 把排查所需的路径直接显示出来
-      $("#bye .t").textContent = "正在更新，通常 10–30 秒后自动重启";
-      $("#bye .s").innerHTML =
-        `若没有自动启动：<br>1. 手动打开安装目录的 pdfread：`
-        + `<b>${esc(d.install_dir || "")}</b><br>`
-        + `2. 仍不行就到发布页手动下载：`
-        + `<a href="${esc(UPDATE.page_url)}" target="_blank">${esc(UPDATE.page_url)}</a><br>`
-        + `3. 更新日志（排查用）：${esc(d.log || "")}`;
+    if (!confirm(`v${d.version} 已下载并通过校验。\n应用将退出并自动完成安装和重启。`
+                 + "（配置、翻译缓存、文库、划线全部保留）\n\n现在开始更新？")) {
+      h.textContent = "已下载，随时可以再点「一键更新」完成安装";
+      h.className = "hint ok";
+      return;
     }
+    h.textContent = "正在准备安装 …";
+    h.className = "hint";
+    const ra = await fetch("/api/update/apply", { method: "POST" });
+    if (!ra.ok) throw new Error((await ra.json()).detail || ra.status);
+    const a = await ra.json();
+    // 服务端已自行安排退出, 此页面随后变为静态信息页
+    if (es) { es.close(); es = null; }
+    $("#upd").classList.remove("on");
+    $("#bye").classList.add("on");
+    document.title = "pdfread 更新中";
+    $("#bye .t").textContent = "正在更新，通常 10–30 秒后自动重启";
+    $("#bye .s").innerHTML =
+      `若没有自动启动：<br>1. 手动打开安装目录的 pdfread：`
+      + `<b>${esc(a.install_dir || "")}</b><br>`
+      + `2. 仍不行就到发布页手动下载：`
+      + `<a href="${esc(UPDATE.page_url)}" target="_blank">${esc(UPDATE.page_url)}</a><br>`
+      + `3. 更新日志（排查用）：${esc(a.log || "")}`;
   } catch (e) {
-    clearInterval(timer);
-    bar.style.display = "none";
     h.textContent = "更新失败：" + e;
     h.className = "hint bad";
+  } finally {
+    clearInterval(timer);
+    bar.style.display = "none";
+    updBusy = false;
   }
-  updBusy = false;
 };
 setTimeout(() => checkUpdate(false), 2000);
 

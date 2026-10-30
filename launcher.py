@@ -9,12 +9,11 @@ if __name__ == "__main__":
     import multiprocessing
     import sys
 
-    # 更新器模式: `pdfread --apply-update PKG PID`, 作为独立进程完成
-    # 替换与重启, 不走脚本解释器(避免被杀毒软件拦截 PowerShell)
-    if len(sys.argv) >= 4 and sys.argv[1] == "--apply-update":
-        from pathlib import Path
-        from pdfread.app import run_updater
-        run_updater(Path(sys.argv[2]), int(sys.argv[3]))
+    # 安装器模式: `pdfread --install-update PLAN`。由旧版本以暂存区里的
+    # 新版本 exe 启动, 等旧进程退出后替换安装目录并重启, 详见 pdfread/updater.py
+    if len(sys.argv) >= 3 and sys.argv[1] == "--install-update":
+        from pdfread.updater import install
+        install(sys.argv[2])
         raise SystemExit(0)
 
     # macOS: multiprocessing 子进程(worker / resource_tracker)会重新

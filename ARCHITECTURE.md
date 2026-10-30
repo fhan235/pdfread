@@ -15,8 +15,8 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 |---|---|---|
 | `pdfread` 命令 | `src/pdfread/cli.py` | 解析参数 → `server.configure()` → uvicorn |
 | `python -m pdfread` | `src/pdfread/__main__.py` | 转调 `cli.main()` |
-| 桌面双击 | `src/pdfread/app.py` | pywebview 原生窗口 → 浏览器应用模式回退；单实例（runtime.json）；关页看门狗；`run_updater()` 一键更新器 |
-| PyInstaller | `launcher.py` + `pdfread.spec` | 打包入口/配置；`--apply-update PKG PID` 进入更新器模式 |
+| 桌面双击 | `src/pdfread/app.py` | pywebview 原生窗口 → 浏览器应用模式回退；单实例（runtime.json）；关页看门狗 |
+| PyInstaller | `launcher.py` + `pdfread.spec` | 打包入口/配置；`--install-update PLAN` 进入安装器模式（见 `updater.py`） |
 
 启动流程：`cli.py` → `server.configure(pdf, roots, cfg, cache_path)`（装配 STATE）
 → 浏览器/原生窗口加载 `/`（即 `static/index.html`）→ 前端 `init()` 恢复标签或进文库。
@@ -37,6 +37,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 | `txt.py` | TXT 原生解析（编码检测、章节识别、按字符切块） | `inspect_txt` |
 | `urlfetch.py` | URL 打开（SSRF 校验、headless 网页转 PDF） | `normalize_url` / `validate_url` / `resolve_checked`（返回已验证 IP 供连接钉扎）/ `fetch_document` |
 | `browser.py` | 系统浏览器探测 + headless 网页转 PDF | `find_browser()` / `html_to_pdf()`（`--host-resolver-rules` 钉 IP 防 SSRF） |
+| `updater.py` | 一键更新的暂存与安装（主进程侧 + 安装器侧） | `prepare()`/`spawn()`（主进程）；`install()`（安装器入口）；`replace()` 只换包内条目可回滚；`pid_alive()`（跨平台，Windows 用 OpenProcess） |
 | `_macos.py` | macOS Dock 图标处理 | `hide_dock_icon()` / `hide_dock_icon_if_multiprocessing_child()` |
 
 ## HTTP API 速查（server.py）
@@ -47,8 +48,8 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 文库：`GET /api/library` L425 · folders L430-451 · documents move/tags/remove L454-481 · `POST /api/library/open` L495 · `POST /api/library/progress` L484
 划线：`GET /api/words/{n}` L526 · `GET/POST /api/highlights` L544/L552 · `POST /api/highlights/delete` L567
 设置：`GET/POST /api/settings`（model/qa_model/base_url/proxy 覆盖，models 候选列表）L684/L714 · `GET/POST /api/parse-settings`（论文模式选项）L761/L768
-版本更新：`GET /api/update/check` L1377 · `POST /api/update/download` L1427 · `POST /api/update/apply`(派生自身 exe 做更新器) L1436
-生命周期：`POST /api/heartbeat` L1488 · `POST /api/pagehide`(关页启动 8s 退出倒计时) L1495 · `POST /api/shutdown`（强制回收进程池后 `os._exit`，不让卡住的 worker 拖住退出）L1525
+版本更新：`GET /api/update/check`(含 `apply_block` 不可一键安装的原因) L1381 · `POST /api/update/download`(下载 + SHA-256 校验) L1482 · `POST /api/update/apply`(用户确认后: 暂存并启动安装器, 随后本进程退出) L1491
+生命周期：`POST /api/heartbeat` L1539 · `POST /api/pagehide`(关页启动 8s 退出倒计时) L1546 · `POST /api/shutdown`（`_schedule_exit()`：强制回收进程池后 `os._exit`，不让卡住的 worker 拖住退出）L1596
 
 ## 数据存储
 
@@ -59,7 +60,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 设置/密钥 | `config_dir()/config.json`（0600） | 环境变量优先于配置文件；另含 `profiles`（按服务 model/base_url/qa_model）、`parse`（论文模式选项）、`history`（最近打开, 上限 20）、`proxy`（更新代理） |
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
 | 运行实例 | `cache_dir()/runtime.json` | `{pid, port}`，桌面版单实例探测 |
-| 更新回执 | `cache_dir()/update/pending.json` + `update.log` | 一键更新标记与更新器日志；下载包在 `cache_dir()/downloads/` |
+| 更新工作区 | `cache_dir()/update/` | `pending.json` 更新回执、`update.log` 安装器日志、`staging-*` 解压出的新版本、`backup-*` 替换时的旧文件（下次检查时清理）；下载包在 `cache_dir()/downloads/` |
 | 前端偏好 | localStorage `pdfread.prefs` | theme/themeCustom/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/expFmt/expSrc/italicSrc/efont/eline/efontFam/efontCustom/skipVersion |
 | 会话标签 | sessionStorage `pdfread.doc` | 当前标签 id |
 
@@ -101,7 +102,9 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。
-- **版本更新**：网页端 `releases/latest` 302 优先（不占 API 配额）+ API 富化（两通道版本一致才合并）；结果缓存 6 小时；下载地址仅允许 `github.com/{_UPDATE_REPO}/releases/download/` 的 https 链接；`apply` 派生自身 exe 第二个进程（`--apply-update`）做替换与重启，下次启动按 `pending.json` 回执成败。
+- **版本更新**：网页端 `releases/latest` 302 优先（不占 API 配额）+ API 富化（两通道版本一致才合并）；结果缓存 6 小时；下载地址必须等于本仓库该版本 Release 的固定地址，并用同一 Release 的 `SHA256SUMS.txt`（CI 生成）校验，缺校验文件则拒绝。
+- **一键安装**（`updater.py`）：①下载校验 → ②用户确认 → ③主进程把包解压到 `staging-*`，以**暂存区里的新版本 exe** 启动安装器（`--install-update PLAN`，设 `PYINSTALLER_RESET_ENVIRONMENT=1` 作为独立实例），然后自行退出 → ④安装器等主进程真正退出（120s 超时则放弃，不改任何文件）→ 只替换安装包里存在的条目（旧条目移入 `backup-*`，失败整体回滚并重启旧版）→ 重启。安装器不在安装目录里运行，因此没有文件锁/ETXTBSY/覆写运行中 .app 的问题；且执行替换的总是新版本自己的逻辑。
+- **跨平台进程检测**：Windows 上 `os.kill(pid, 0)` 会被当成 Ctrl+C 广播（bpo-14484），不能用来判断存活，统一走 `updater.pid_alive()`。
 
 ## 常见改动去哪改
 
@@ -115,6 +118,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 改文库 UI | `style.css`「文库侧栏」区块 + `js/library.js` |
 | 段落识别优化 | `extract.py`（通用）/ `paper.py`（论文模式） |
 | 改更新通道 | `server.py` `_UPDATE_REPO` + 前端 `prefs.js` 的 `checkUpdate()` |
+| 改安装流程 | `updater.py`；**`--install-update PLAN` 的参数与 plan.json 字段是跨版本协议**（旧版本会用它启动新版本），只能新增字段，不能改名或删除 |
 
 ## 测试
 
@@ -136,5 +140,6 @@ urlfetch 拦内网/凭证 URL 并返回已验证 IP；网页转 PDF 时 Chrome �
 `--host-resolver-rules` 钉住该 IP 且其余域名解析失败(页面级跳转/子资源拦截,
 残余风险: IP 字面量直链的内网资源不经 DNS 无法拦截)；
 EPUB 解压设单文件/总量上限防 zip bomb、内嵌 SVG 加 CSP sandbox；
-更新包下载地址白名单（仅本仓库 Release 的 https 链接，上限 500MB）；
+更新包仅接受本仓库 Release 固定地址并校验 SHA-256（上限 500MB），tar 解压用 `filter="data"` 防越界，
+安装器只替换包内条目、绝不触碰安装目录里的其他文件；
 解析在独立进程，失败重建进程池释放句柄。

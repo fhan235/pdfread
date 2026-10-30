@@ -10,10 +10,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import multiprocessing
 import tempfile
@@ -1146,7 +1146,11 @@ async def raw_pdf(doc: str = "") -> FileResponse:
 _UPDATE_REPO = "fhan235/pdfread"
 _UPDATE_TTL = 6 * 3600          # 检查结果缓存 6 小时
 _UPDATE_MAX = 500 * 1024 * 1024  # 安装包上限 500MB
+_UPDATE_SUMS = "SHA256SUMS.txt"  # Release 附带的校验文件(CI 生成)
+_VER_RE = re.compile(r"[0-9][0-9A-Za-z.\-]{0,40}")
+_ASSET_RE = re.compile(r"pdfread-[A-Za-z0-9.\-]+\.(?:zip|dmg|tar\.gz)")
 _update_cache: dict = {"ts": 0.0, "data": None}
+_download_lock = asyncio.Lock()   # 「仅下载」与「一键更新」写同一文件, 串行化
 
 
 def _ver_tuple(v: str) -> tuple:
@@ -1376,105 +1380,152 @@ def _consume_update_result() -> dict | None:
 
 @app.get("/api/update/check")
 async def update_check(force: bool = False) -> dict:
-    data = await _latest_release(force)
+    data = dict(await _latest_release(force))   # 复制, 不污染检查结果缓存
+    data["apply_block"] = _apply_block()
     result = _consume_update_result()
     if result is not None:
         data["update_result"] = result
+        from .updater import cleanup
+        await asyncio.to_thread(cleanup, cache_dir() / "update")   # 上次的暂存区/备份
     return data
 
 
+def _apply_block() -> str:
+    """一键安装不可用的原因; 可用时返回空串。"""
+    if not getattr(sys, "frozen", False):
+        return "源码/开发模式不支持自动安装，请用 pip 升级或到发布页重新下载"
+    from .paths import install_target
+    from .updater import preflight
+    return preflight(install_target()[0])
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def _fetch_checksum(client, version: str, name: str) -> str:
+    """从同一 Release 的 SHA256SUMS.txt 取安装包的校验值; 取不到则拒绝安装。"""
+    url = (f"https://github.com/{_UPDATE_REPO}/releases/download"
+           f"/v{version}/{_UPDATE_SUMS}")
+    r = await client.get(url, headers={"User-Agent": "pdfread-updater"})
+    if r.status_code == 200 and len(r.content) <= 65536:
+        for line in r.text.splitlines():
+            parts = line.split()
+            if (len(parts) == 2 and parts[1].lstrip("*") == name
+                    and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0])):
+                return parts[0].lower()
+    raise HTTPException(502, f"该版本没有提供 {name} 的校验值，为安全起见不自动安装，"
+                             "请到发布页手动下载")
+
+
 async def _download_asset(data: dict, task: str = "") -> Path:
-    """下载最新安装包到缓存目录, 返回路径。只允许本仓库 Release 地址。"""
+    """下载最新安装包到缓存目录并做 SHA-256 校验, 返回路径。
+
+    - 只接受本仓库该版本 Release 下的固定地址(版本号/文件名也做格式校验)
+    - 校验值取自同一 Release 的 SHA256SUMS.txt, 没有校验文件则拒绝
+    - 先写 .part, 校验通过才改名; 已存在且校验一致的文件直接复用
+    """
     url = data.get("asset_url") or ""
     if not data.get("newer") or not url:
         raise HTTPException(400, data.get("error") or "没有可用的新版本")
-    parts = urlsplit(url)
-    allowed = (parts.hostname == "github.com"
-               and parts.path.startswith(f"/{_UPDATE_REPO}/releases/download/"))
-    if parts.scheme != "https" or not allowed:
+    latest, name = str(data.get("latest", "")), str(data.get("asset_name", ""))
+    expected = (f"https://github.com/{_UPDATE_REPO}/releases/download"
+                f"/v{latest}/{name}")
+    if not (_VER_RE.fullmatch(latest) and _ASSET_RE.fullmatch(name)
+            and url == expected):
         raise HTTPException(400, "下载地址不合法")
 
-    dest_dir = cache_dir() / "downloads"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / data["asset_name"]
-    try:
-        async with _update_client(timeout=60.0,
-                                  follow_redirects=True) as client:
-            async with client.stream(
-                    "GET", url,
-                    headers={"User-Agent": "pdfread-updater"}) as r:
-                if r.status_code != 200:
-                    raise HTTPException(502, f"下载失败: HTTP {r.status_code}")
-                size = 0
-                total = int(r.headers.get("content-length") or 0) or None
-                with dest.open("wb") as fh:
-                    async for chunk in r.aiter_bytes(1 << 16):
-                        size += len(chunk)
-                        if size > _UPDATE_MAX:
-                            raise HTTPException(413, "安装包过大")
-                        fh.write(chunk)
-                        _set_progress(task, "download", size, total)
-        _set_progress(task, "done", 1, 1)
-    except HTTPException:
-        dest.unlink(missing_ok=True)
-        raise
-    except Exception as exc:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(502, f"下载失败: {exc}") from None
+    async with _download_lock:
+        dest_dir = cache_dir() / "downloads"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest, part = dest_dir / name, dest_dir / (name + ".part")
+        try:
+            async with _update_client(timeout=60.0,
+                                      follow_redirects=True) as client:
+                digest = await _fetch_checksum(client, latest, name)
+                if dest.is_file() and await asyncio.to_thread(_sha256, dest) == digest:
+                    _set_progress(task, "done", 1, 1)
+                    return dest
+                h = hashlib.sha256()
+                async with client.stream(
+                        "GET", url,
+                        headers={"User-Agent": "pdfread-updater"}) as r:
+                    if r.status_code != 200:
+                        raise HTTPException(502, f"下载失败: HTTP {r.status_code}")
+                    size = 0
+                    total = int(r.headers.get("content-length") or 0) or None
+                    with part.open("wb") as fh:
+                        async for chunk in r.aiter_bytes(1 << 16):
+                            size += len(chunk)
+                            if size > _UPDATE_MAX:
+                                raise HTTPException(413, "安装包过大")
+                            fh.write(chunk)
+                            h.update(chunk)
+                            _set_progress(task, "download", size, total)
+            if h.hexdigest() != digest:
+                raise HTTPException(502, "安装包校验失败（SHA-256 不一致），已丢弃，请重试")
+            part.replace(dest)
+        except HTTPException:
+            part.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            part.unlink(missing_ok=True)
+            raise HTTPException(502, f"下载失败: {exc}") from None
+    _set_progress(task, "done", 1, 1)
     return dest
 
 
 @app.post("/api/update/download")
-async def update_download() -> dict:
-    """仅下载最新安装包到缓存目录。"""
+async def update_download(task: str = "") -> dict:
+    """下载并校验最新安装包(「仅下载」, 以及「一键更新」确认前的下载阶段)。"""
     data = await _latest_release()
-    dest = await _download_asset(data)
+    dest = await _download_asset(data, task)
     return {"path": str(dest), "name": dest.name, "size": dest.stat().st_size,
             "version": data.get("latest", "")}
 
 
 @app.post("/api/update/apply")
-async def update_apply(task: str = "") -> dict:
-    """一键更新: 下载安装包 -> 派生自身 exe 作为更新器 -> 前端随后调用 shutdown。
+async def update_apply() -> dict:
+    """一键更新(用户确认后调用): 暂存新版本 -> 以新版本启动安装器 -> 本进程退出。
 
-    仅打包后的桌面应用可用(需要可替换的安装目录); 源码模式请用 pip 升级。
-    更新器是应用自身的第二个进程(--apply-update), 不走脚本解释器,
-    避免 PowerShell 脚本被杀毒软件拦截。写入 pending 标记,
-    下次启动时校验更新结果并在检查接口中回执。
+    安装器等本进程退出后才替换安装目录, 详见 updater 模块。
+    写入 pending 标记, 下次启动时在检查接口中回执更新结果。
+    仅打包后的桌面应用可用; 源码模式请用 pip 升级。
     """
-    if not getattr(sys, "frozen", False):
-        raise HTTPException(400, "源码/开发模式不支持自动安装，请用 pip 或重新下载")
-    data = await _latest_release()
-    pkg = await _download_asset(data, task)
-
-    # 更新回执: 下次启动按版本号判断是否成功
-    log_path = cache_dir() / "update" / "update.log"
-    try:
-        marker = {"version": data.get("latest", ""), "ts": time.time(),
-                  "log": str(log_path)}
-        (cache_dir() / "update").mkdir(parents=True, exist_ok=True)
-        (cache_dir() / "update" / "pending.json").write_text(
-            json.dumps(marker, ensure_ascii=False), "utf-8")
-    except OSError:
-        pass
-
+    block = _apply_block()
+    if block:
+        raise HTTPException(400, block)
+    from . import updater
     from .paths import install_target
-    args = [sys.executable, "--apply-update", str(pkg), str(os.getpid())]
-    if sys.platform == "win32":
-        subprocess.Popen(
-            args,
-            creationflags=subprocess.CREATE_NO_WINDOW
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.DETACHED_PROCESS,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    else:
-        subprocess.Popen(args, start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return {"ok": True, "version": data.get("latest", ""),
-            "message": "更新器已就绪",
-            "log": str(log_path),
-            "install_dir": str(install_target()[0])}
+
+    data = await _latest_release()
+    pkg = await _download_asset(data)   # 已下载且校验一致时直接复用
+    target = install_target()[0]
+    workdir = cache_dir() / "update"
+    workdir.mkdir(parents=True, exist_ok=True)
+    version = str(data.get("latest", ""))
+    log_path = workdir / "update.log"
+    try:
+        exe, plan = await asyncio.to_thread(
+            updater.prepare, pkg, target, os.getpid(), version, workdir)
+    except Exception as exc:
+        raise HTTPException(500, f"准备更新失败: {exc}") from None
+
+    marker = workdir / "pending.json"
+    marker.write_text(json.dumps({"version": version, "ts": time.time(),
+                                  "log": str(log_path)}, ensure_ascii=False), "utf-8")
+    try:
+        updater.spawn(exe, plan)
+    except Exception as exc:
+        marker.unlink(missing_ok=True)
+        raise HTTPException(500, f"启动安装器失败: {exc}") from None
+    _schedule_exit()   # 不依赖前端再调 shutdown, 安装器等的就是本进程退出
+    return {"ok": True, "version": version, "log": str(log_path),
+            "install_dir": str(target)}
 
 
 # ---------- 页面心跳 / 关页退出看门狗 ----------
@@ -1522,22 +1573,30 @@ def enable_page_watchdog() -> None:
     threading.Thread(target=loop, daemon=True).start()
 
 
-@app.post("/api/shutdown")
-async def shutdown() -> dict:
-    """退出应用。
+_exit_task = None
 
-    先返回响应, 再强制回收进程池(worker 卡住也不能拖住退出),
-    最后退出。os._exit 放在 finally, 任何清理异常都不能阻止退出。
+
+def _schedule_exit(delay: float = 0.4) -> None:
+    """先让当前响应发出, 再强制回收进程池(worker 卡住也不能拖住退出)并退出。
+
+    os._exit 放在 finally, 任何清理异常都不能阻止退出。
     """
+    global _exit_task
 
     async def stop() -> None:
         try:
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(delay)
             _close_pool()
         finally:
             os._exit(0)
 
-    asyncio.create_task(stop())
+    _exit_task = asyncio.get_running_loop().create_task(stop())   # 持有引用防被回收
+
+
+@app.post("/api/shutdown")
+async def shutdown() -> dict:
+    """退出应用。"""
+    _schedule_exit()
     return {"ok": True, "message": "服务即将退出"}
 
 

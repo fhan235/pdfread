@@ -40,6 +40,7 @@ hiddenimports = [
     "pdfread.paths",
     "pdfread.settings",
     "pdfread.app",
+    "pdfread.updater",
     "uvicorn.logging",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",
