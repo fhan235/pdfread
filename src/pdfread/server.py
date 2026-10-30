@@ -1166,6 +1166,63 @@ async def _fallback_latest(client) -> dict | None:
     }
 
 
+def _update_proxy() -> str | None:
+    """更新检查/下载使用的代理: 环境变量优先, 其次系统代理设置。
+
+    httpx 只读环境变量, 打包后双击启动没有 shell 环境,
+    浏览器能开 GitHub 而应用不能, 差别就在这里。
+    """
+    for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+              "HTTP_PROXY", "http_proxy"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            return v
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            server_, _ = winreg.QueryValueEx(key, "ProxyServer")
+            winreg.CloseKey(key)
+            if enabled and server_:
+                # 可能是 "http=h:1;https=h:2" 或统一 "h:port"
+                for part in str(server_).split(";"):
+                    part = part.strip()
+                    if part.startswith("https="):
+                        return "http://" + part[6:]
+                first = str(server_).split(";")[0].strip()
+                if "=" in first:
+                    first = first.split("=", 1)[1]
+                if first:
+                    return "http://" + first
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            import subprocess
+            out = subprocess.run(["scutil", "--proxy"], capture_output=True,
+                                 text=True, timeout=3).stdout
+            en = re.search(r"HTTPSEnable\s*:\s*1", out)
+            host = re.search(r"HTTPSProxy\s*:\s*(\S+)", out)
+            port = re.search(r"HTTPSPort\s*:\s*(\d+)", out)
+            if en and host:
+                return f"http://{host.group(1)}:{(port and port.group(1)) or '443'}"
+        except Exception:
+            pass
+    return None
+
+
+def _update_client(timeout: float = 8.0, **extra):
+    import httpx
+    proxy = _update_proxy()
+    kwargs = {"timeout": timeout, **extra}
+    if proxy:
+        kwargs["proxy"] = proxy
+    return httpx.AsyncClient(**kwargs)
+
+
 async def _latest_release(force: bool = False) -> dict:
     """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。"""
     if not force and _update_cache["data"] and \
@@ -1175,7 +1232,7 @@ async def _latest_release(force: bool = False) -> dict:
     from . import __version__
     data = {"current": __version__, "newer": False, "error": ""}
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with _update_client(timeout=8.0) as client:
             r = await client.get(
                 f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
                 headers={"User-Agent": f"pdfread/{__version__}",
@@ -1200,11 +1257,13 @@ async def _latest_release(force: bool = False) -> dict:
                 fb["fallback"] = True
                 data.update(fb)
             else:
-                data["error"] = "GitHub API 限流（共享代理 IP 易触顶），请稍后重试"
+                data["error"] = "GitHub API 限流，且网页端回退也失败，请检查网络/代理后重试"
         else:
             data["error"] = f"HTTP {r.status_code}"
     except Exception as exc:
-        data["error"] = str(exc)[:200]
+        data["error"] = (f"网络请求失败: {str(exc)[:150]}"
+                         "（浏览器能开 GitHub 而这里失败，通常是应用未走系统代理，"
+                         "可设置 HTTPS_PROXY 环境变量后重启应用）")
     _update_cache.update(ts=time.time(), data=data)
     return data
 
@@ -1232,8 +1291,8 @@ async def update_download() -> dict:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / data["asset_name"]
     try:
-        async with httpx.AsyncClient(timeout=60.0,
-                                     follow_redirects=True) as client:
+        async with _update_client(timeout=60.0,
+                                  follow_redirects=True) as client:
             async with client.stream(
                     "GET", url,
                     headers={"User-Agent": "pdfread-updater"}) as r:
