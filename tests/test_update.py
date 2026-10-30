@@ -98,3 +98,22 @@ def test_proxy_setting_roundtrip(client):
     r = client.post("/api/settings", json={"proxy": ""})
     assert r.status_code == 200
     assert client.get("/api/settings").json()["proxy"] == ""
+
+
+def test_apply_rejected_in_source_mode(client):
+    r = client.post("/api/update/apply")
+    assert r.status_code == 400
+    assert "源码" in r.json()["detail"]
+
+
+def test_updater_script_linux(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(server.sys, "platform", "linux")
+    monkeypatch.setattr(server.sys, "executable", str(tmp_path / "app" / "pdfread"))
+    monkeypatch.setenv("PDFREAD_CACHE_DIR", str(tmp_path / "cache"))
+    script = server._write_updater(tmp_path / "pdfread-linux-x64.tar.gz", 12345)
+    content = script.read_text("utf-8")
+    assert "kill -0 12345" in content          # 等待主进程退出
+    assert "tar -xzf" in content
+    assert str(tmp_path / "app") in content    # 替换安装目录
+    assert "nohup" in content                  # 重启新版本

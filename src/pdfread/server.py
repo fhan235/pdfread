@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 import multiprocessing
 import tempfile
@@ -1320,10 +1321,8 @@ async def update_check(force: bool = False) -> dict:
     return await _latest_release(force)
 
 
-@app.post("/api/update/download")
-async def update_download() -> dict:
-    """下载最新安装包到缓存目录。只允许本仓库 Release 的资源地址。"""
-    data = await _latest_release()
+async def _download_asset(data: dict) -> Path:
+    """下载最新安装包到缓存目录, 返回路径。只允许本仓库 Release 地址。"""
     url = data.get("asset_url") or ""
     if not data.get("newer") or not url:
         raise HTTPException(400, data.get("error") or "没有可用的新版本")
@@ -1333,7 +1332,6 @@ async def update_download() -> dict:
     if parts.scheme != "https" or not allowed:
         raise HTTPException(400, "下载地址不合法")
 
-    import httpx
     dest_dir = cache_dir() / "downloads"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / data["asset_name"]
@@ -1358,8 +1356,113 @@ async def update_download() -> dict:
     except Exception as exc:
         dest.unlink(missing_ok=True)
         raise HTTPException(502, f"下载失败: {exc}") from None
-    return {"path": str(dest), "name": dest.name, "size": size,
+    return dest
+
+
+@app.post("/api/update/download")
+async def update_download() -> dict:
+    """仅下载最新安装包到缓存目录。"""
+    data = await _latest_release()
+    dest = await _download_asset(data)
+    return {"path": str(dest), "name": dest.name, "size": dest.stat().st_size,
             "version": data.get("latest", "")}
+
+
+def _install_target() -> tuple[Path, Path]:
+    """返回 (安装目录, 可执行入口)。macOS 为 (.app 包路径, 同名入口)。"""
+    exe = Path(sys.executable).resolve()
+    if sys.platform == "darwin":
+        # .../pdfread.app/Contents/MacOS/pdfread -> .app 包
+        app = exe
+        while app.suffix != ".app" and app != app.parent:
+            app = app.parent
+        return app, exe
+    return exe.parent, exe
+
+
+def _write_updater(pkg: Path, pid: int) -> Path:
+    """生成平台对应的更新器脚本: 等主进程退出 -> 替换 -> 重启。
+
+    运行中的程序不能替换自身, 因此由这个脱离主进程的外部脚本完成。
+    """
+    import shlex
+    target, exe = _install_target()
+    work = cache_dir() / "update"
+    work.mkdir(parents=True, exist_ok=True)
+    log = work / "update.log"
+    pkg_s, target_s, exe_s, log_s = (str(pkg), str(target), str(exe), str(log))
+
+    if sys.platform == "win32":
+        script = work / "update.ps1"
+        content = (
+            f"$ppid={pid}\n$pkg='{pkg_s}'\n$dest='{target_s}'\n$exe='{exe_s}'\n"
+            f"$log='{log_s}'\n"
+            "try {\n"
+            "  while (Get-Process -Id $ppid -ErrorAction SilentlyContinue) "
+            "{ Start-Sleep -Milliseconds 500 }\n"
+            "  $tmp = Join-Path $env:TEMP ('pdfread-upd-' + [guid]::NewGuid())\n"
+            "  Expand-Archive -LiteralPath $pkg -DestinationPath $tmp -Force\n"
+            "  Copy-Item -Path (Join-Path $tmp '*') -Destination $dest -Recurse -Force\n"
+            "  Remove-Item -Recurse -Force $tmp\n"
+            "  Start-Process -FilePath $exe\n"
+            "} catch { $_ | Out-File -FilePath $log }\n"
+        )
+    elif sys.platform == "darwin":
+        script = work / "update.sh"
+        content = (
+            "#!/bin/sh\n"
+            f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
+            "TMP=$(mktemp -d)\n"
+            f"hdiutil attach -nobrowse -quiet -mountpoint \"$TMP/mnt\" {shlex.quote(pkg_s)}\n"
+            f"ditto \"$TMP/mnt/pdfread.app\" {shlex.quote(target_s)}\n"
+            "hdiutil detach -quiet \"$TMP/mnt\"\n"
+            f"xattr -cr {shlex.quote(target_s)} 2>/dev/null\n"
+            "rm -rf \"$TMP\"\n"
+            f"open {shlex.quote(target_s)}\n"
+        )
+    else:
+        script = work / "update.sh"
+        content = (
+            "#!/bin/sh\n"
+            f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
+            "TMP=$(mktemp -d)\n"
+            f"tar -xzf {shlex.quote(pkg_s)} -C \"$TMP\"\n"
+            f"cp -a \"$TMP/pdfread/.\" {shlex.quote(target_s)}/\n"
+            f"chmod +x {shlex.quote(exe_s)}\n"
+            "rm -rf \"$TMP\"\n"
+            f"nohup {shlex.quote(exe_s)} >/dev/null 2>&1 &\n"
+        )
+    script.write_text(content, encoding="utf-8")
+    return script
+
+
+@app.post("/api/update/apply")
+async def update_apply() -> dict:
+    """一键更新: 下载安装包 -> 生成并派生更新器 -> 前端随后调用 shutdown。
+
+    仅打包后的桌面应用可用(需要可替换的安装目录); 源码模式请用 pip 升级。
+    """
+    if not getattr(sys, "frozen", False):
+        raise HTTPException(400, "源码/开发模式不支持自动安装，请用 pip 或重新下载")
+    data = await _latest_release()
+    pkg = await _download_asset(data)
+    script = _write_updater(pkg, os.getpid())
+
+    if sys.platform == "win32":
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
+             "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            creationflags=subprocess.CREATE_NO_WINDOW
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.Popen(["/bin/sh", str(script)],
+                         start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True, "version": data.get("latest", ""),
+            "message": "更新器已就绪"}
 
 
 # ---------- 页面心跳 / 关页退出看门狗 ----------

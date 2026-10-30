@@ -660,6 +660,36 @@ $("#updDl").onclick = async () => {
     h.className = "hint bad";
   }
 };
+
+/* 一键更新: 下载 + 生成更新器, 确认后退出应用, 外部更新器替换文件并自动重启 */
+$("#updApply").onclick = async () => {
+  const h = $("#updHint");
+  if (!UPDATE.asset_url) {
+    h.textContent = "该版本没有当前平台的安装包，请到发布页下载";
+    h.className = "hint bad";
+    return;
+  }
+  h.textContent = `正在下载 ${UPDATE.asset_name} …`;
+  h.className = "hint";
+  try {
+    const r = await fetch("/api/update/apply", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    $("#upd").classList.remove("on");
+    if (confirm(`v${d.version} 已下载完成。\n应用将退出并自动完成安装和重启。`
+                + "（配置、翻译缓存、文库、划线全部保留）\n\n现在开始更新？")) {
+      if (es) { es.close(); es = null; }
+      try { await fetch("/api/shutdown", { method: "POST" }); } catch (e) {}
+      $("#bye").classList.add("on");
+      document.title = "pdfread 更新中";
+      $("#bye .t").textContent = "正在更新，几秒后自动重启…";
+      $("#bye .s").textContent = "若一分钟内没有自动启动，请手动打开 pdfread";
+    }
+  } catch (e) {
+    h.textContent = "更新失败：" + e;
+    h.className = "hint bad";
+  }
+};
 setTimeout(() => checkUpdate(false), 2000);
 
 /* 启动: 先恢复阅读偏好, 再加载 */
