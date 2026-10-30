@@ -1,23 +1,26 @@
 /* ---------------- 划线高亮 ---------------- */
 /* 坐标以 PDF 点存储, 前端按页面尺寸换算成百分比定位,
-   缩放 / 高清重取图都不会错位 */
+   缩放 / 高清重取图都不会错位。
+   注意: 取词/加载是异步的, 期间用户可能切换文档, 因此每次手势
+   开始时捕获 doc 与 sizes 快照, 全链路使用快照而不是可变 INFO */
 const marksByDoc = {};   // 运行时文档 id -> { 页码: [{id, rects, color}] }
 const wordsByDoc = {};   // 运行时文档 id -> { 页码: [[x0,y0,x1,y1,词,块,行]] }
 let drag = null;
 
 async function loadMarks() {
   if (!INFO || !INFO.doc || !INFO.lib || INFO.fmt !== "pdf") return;
-  if (!marksByDoc[INFO.doc]) {
+  const doc = INFO.doc;   // 快照: 异步返回时 INFO 可能已指向别的文档
+  if (!marksByDoc[doc]) {
     try {
-      const r = await fetch("/api/highlights?doc=" + INFO.doc);
+      const r = await fetch("/api/highlights?doc=" + doc);
       if (!r.ok) return;
       const d = await r.json();
       const byPage = {};
       for (const m of d.items) (byPage[m.page] = byPage[m.page] || []).push(m);
-      marksByDoc[INFO.doc] = byPage;
+      marksByDoc[doc] = byPage;
     } catch (e) { return; }
   }
-  renderAllMarks();
+  if (INFO && INFO.doc === doc) renderAllMarks();   // 已切走则不渲染
 }
 
 function renderAllMarks() {
@@ -46,10 +49,10 @@ function hlDiv(r, pw, ph, id, cls) {
   return el;
 }
 
-async function ensureWords(page) {
-  const bag = (wordsByDoc[INFO.doc] = wordsByDoc[INFO.doc] || {});
+async function ensureWords(page, doc) {
+  const bag = (wordsByDoc[doc] = wordsByDoc[doc] || {});
   if (bag[page]) return bag[page];
-  const r = await fetch(`/api/words/${page}?doc=` + INFO.doc);
+  const r = await fetch(`/api/words/${page}?doc=` + doc);
   if (!r.ok) throw new Error("词坐标读取失败");
   const d = await r.json();
   bag[page] = d.words;
@@ -96,8 +99,8 @@ function selectionText(words, i, j) {
   return words.slice(lo, hi + 1).map((w) => w[4]).join(" ").slice(0, 20000);
 }
 
-function pagePoint(wrap, page, e) {
-  const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+function pagePoint(wrap, page, e, sizes) {
+  const [pw, ph] = sizes[page - 1] || [612, 792];
   const rect = wrap.getBoundingClientRect();
   return {
     x: Math.min(Math.max((e.clientX - rect.left) / (rect.width || 1) * pw, 0), pw),
@@ -107,7 +110,7 @@ function pagePoint(wrap, page, e) {
 
 /* 拖选后先弹「确认划线」浮动按钮(ReadPaper 式), 确认才入库;
    点其他位置 / 开始新拖选 / 滚动都会取消待确认的预览 */
-let pendingMark = null;   // {page, rects, layer}
+let pendingMark = null;   // {doc, page, rects, layer, text, x, y}
 
 function discardPending() {
   if (pendingMark) {
@@ -118,9 +121,9 @@ function discardPending() {
 }
 
 function previewSelection() {
-  const { layer, words, start, cur, page } = drag;
+  const { layer, words, start, cur, page, sizes } = drag;
   layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
-  const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+  const [pw, ph] = sizes[page - 1] || [612, 792];
   for (const r of selectionRects(words, start, cur)) {
     layer.appendChild(hlDiv(r, pw, ph, 0, " preview"));
   }
@@ -155,13 +158,16 @@ left.addEventListener("mousedown", (e) => {
   const pg = wrap.closest(".pg");
   if (!pg) return;
   const page = +pg.id.slice(1);
+  const doc = INFO.doc, sizes = INFO.sizes;   // 快照归属, 防异步期间切文档
   e.preventDefault();   // 阻止图片拖拽/默认选区
   hideHlPop();
   discardPending();
-  ensureWords(page).then((words) => {
-    const pt = pagePoint(wrap, page, e);
-    drag = { page, wrap, layer: wrap.querySelector(".hlayer"), words,
-             start: hitWord(words, pt.x, pt.y), cur: -1,
+  ensureWords(page, doc).then((words) => {
+    // 词表到达时已切换文档: 放弃这次手势, 不在错误文档上建立选区
+    if (!INFO || INFO.doc !== doc) return;
+    const pt = pagePoint(wrap, page, e, sizes);
+    drag = { doc, sizes, page, wrap, layer: wrap.querySelector(".hlayer"),
+             words, start: hitWord(words, pt.x, pt.y), cur: -1,
              moved: false, sx: e.clientX, sy: e.clientY };
     drag.cur = drag.start;
   }).catch(() => {});
@@ -174,7 +180,7 @@ document.addEventListener("mousemove", (e) => {
     drag.moved = true;
   }
   if (!drag.moved) return;
-  const pt = pagePoint(drag.wrap, drag.page, e);
+  const pt = pagePoint(drag.wrap, drag.page, e, drag.sizes);
   const idx = hitWord(drag.words, pt.x, pt.y);
   if (idx < 0) return;
   if (drag.start < 0) {
@@ -188,10 +194,10 @@ document.addEventListener("mousemove", (e) => {
 });
 
 /* 保留预览并弹出「划线/翻译」确认按钮 */
-function confirmSelection(page, layer, rects, text, x, y) {
-  pendingMark = { page, rects, layer, text, x, y };
+function confirmSelection(doc, page, layer, rects, text, x, y) {
+  pendingMark = { doc, page, rects, layer, text, x, y };
   const pop = $("#hlConfirm");
-  pop.style.display = "flex";   // 两按钮并排
+  pop.style.display = "flex";   // 按钮并排
   pop.style.left = Math.min(x, window.innerWidth - 280) + "px";
   pop.style.top = (y + 8) + "px";
 }
@@ -201,14 +207,15 @@ document.addEventListener("mouseup", (e) => {
   const d = drag;
   drag = null;
   discardPending();
-  const valid = d.moved && d.start >= 0 && d.cur >= 0 && INFO && INFO.doc;
+  const valid = d.moved && d.start >= 0 && d.cur >= 0
+                && INFO && INFO.doc === d.doc;
   const rects = valid ? selectionRects(d.words, d.start, d.cur) : [];
-  if (!rects.length) {   // 单击或无效选区: 清掉预览, 不弹确认
+  if (!rects.length) {   // 单击/无效选区/已切文档: 清掉预览, 不弹确认
     d.layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
     return;
   }
   // 保留预览, 等用户点浮动按钮确认
-  confirmSelection(d.page, d.layer, rects,
+  confirmSelection(d.doc, d.page, d.layer, rects,
                    selectionText(d.words, d.start, d.cur), e.clientX, e.clientY);
 });
 
@@ -221,16 +228,18 @@ left.addEventListener("dblclick", (e) => {
   const pg = wrap.closest(".pg");
   if (!pg) return;
   const page = +pg.id.slice(1);
-  ensureWords(page).then((words) => {
-    const pt = pagePoint(wrap, page, e);
+  const doc = INFO.doc, sizes = INFO.sizes;
+  ensureWords(page, doc).then((words) => {
+    if (!INFO || INFO.doc !== doc) return;   // 已切换文档, 放弃
+    const pt = pagePoint(wrap, page, e, sizes);
     const idx = hitWord(words, pt.x, pt.y);
     if (idx < 0) return;
     discardPending();
     const layer = wrap.querySelector(".hlayer");
     const rects = selectionRects(words, idx, idx);
-    const [pw, ph] = INFO.sizes[page - 1] || [612, 792];
+    const [pw, ph] = sizes[page - 1] || [612, 792];
     for (const r of rects) layer.appendChild(hlDiv(r, pw, ph, 0, " preview"));
-    confirmSelection(page, layer, rects,
+    confirmSelection(doc, page, layer, rects,
                      selectionText(words, idx, idx), e.clientX, e.clientY);
   }).catch(() => {});
 });
@@ -239,14 +248,15 @@ $("#hlOk").onclick = async () => {
   const p = pendingMark;
   pendingMark = null;
   $("#hlConfirm").style.display = "none";
-  if (!p || !INFO || !INFO.doc) return;
+  if (!p) return;
   try {
-    const r = await libPost("/api/highlights", { doc: INFO.doc, page: p.page, rects: p.rects });
+    // 保存到发起手势时的文档快照, 即使期间切换了标签也不串档
+    const r = await libPost("/api/highlights", { doc: p.doc, page: p.page, rects: p.rects });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const m = await r.json();
-    const bag = (marksByDoc[INFO.doc] = marksByDoc[INFO.doc] || {});
+    const bag = (marksByDoc[p.doc] = marksByDoc[p.doc] || {});
     (bag[p.page] = bag[p.page] || []).push(m);
-    renderMarks(p.page);   // 永久高亮取代预览
+    if (INFO && INFO.doc === p.doc) renderMarks(p.page);   // 永久高亮取代预览
   } catch (err) {
     p.layer.querySelectorAll(".hl.preview").forEach((el) => el.remove());
     $("#runStatus").textContent = "划线保存失败：" + err;
@@ -278,11 +288,11 @@ function hideTrPop() { $("#trPop").style.display = "none"; }
 
 $("#hlTr").onclick = async () => {
   const p = pendingMark;
-  if (!p || !p.text || !INFO || !INFO.doc) return;
+  if (!p || !p.text) return;
   $("#hlConfirm").style.display = "none";
   showTrPop("翻译中…", p.x, p.y);
   try {
-    const r = await libPost("/api/translate-text", { doc: INFO.doc, text: p.text });
+    const r = await libPost("/api/translate-text", { doc: p.doc, text: p.text });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const d = await r.json();
     showTrPop(d.dst, p.x, p.y);

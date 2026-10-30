@@ -64,15 +64,16 @@ def _close_pool() -> None:
 
     shutdown(wait=True) 会等正在执行的任务结束; worker 卡住时
     (大文件解析 / PyMuPDF 在 C 层阻塞) 会无限等待, 退出后进程残留。
-    这里只取消排队任务, 再给存活 worker 发 terminate,
-    保证退出路径确定性完成, 不被任务拖住。
+    注意: shutdown() 会把 _processes 置 None, 必须先抓进程列表,
+    再 shutdown, 最后 terminate, 顺序不能反。
     """
     global _pool
     pool, _pool = _pool, None
     if pool is None:
         return
+    procs = list((getattr(pool, "_processes", None) or {}).values())
     pool.shutdown(wait=False, cancel_futures=True)
-    for proc in (getattr(pool, "_processes", None) or {}).values():
+    for proc in procs:
         try:
             if proc.is_alive():
                 proc.terminate()

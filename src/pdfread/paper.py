@@ -543,6 +543,24 @@ def _is_standalone_formula(text: str) -> bool:
     return math_chars >= 2 and len(words) <= 2 and math_chars * 4 >= len(core)
 
 
+def _merge_formulas(prev: Block, b: Block) -> None:
+    """把 b 的公式还原表并入 prev, 键冲突时重命名 b 的占位符。
+
+    mask_formulas 对每个块独立从 F1 编号, 缝合时直接 update 会让
+    后块覆盖前块的同名键, 两个 ⟦F1⟧ 都还原成后块公式(静默错内容)。
+    """
+    for key in list(b.formulas):
+        if key in prev.formulas:
+            n = 1
+            while f"{key}_{n}" in prev.formulas:
+                n += 1
+            new_key = f"{key}_{n}"
+            # 占位符文本同步替换, 保持 占位符↔公式 一一对应
+            b.text = b.text.replace(f"⟦{key}⟧", f"⟦{new_key}⟧")
+            b.formulas[new_key] = b.formulas.pop(key)
+    prev.formulas.update(b.formulas)
+
+
 def _stitch_pages(pages: list[list[Block]], fold_formula: bool) -> list[list[Block]]:
     """跨页缝合正文。
 
@@ -581,8 +599,8 @@ def _stitch_pages(pages: list[list[Block]], fold_formula: bool) -> list[list[Blo
         if fold_formula and b.kind == "body" and _is_standalone_formula(ct):
             prev = prev_body(kept)
             if prev is not None:
-                prev.text = prev.text.rstrip() + " " + ct
-                prev.formulas.update(b.formulas)
+                _merge_formulas(prev, b)
+                prev.text = prev.text.rstrip() + " " + b.text.strip()
                 continue
 
         lower_start = bool(ct) and (ct[0].islower() or ct[0] in ",;:)")
@@ -603,11 +621,12 @@ def _stitch_pages(pages: list[list[Block]], fold_formula: bool) -> list[list[Blo
             kept.append((pi, b))
             continue
 
+        _merge_formulas(prev, b)
+        ct = b.text.strip()
         if hyphen:
             prev.text = _HYPHEN_END.sub(r"\1", pt) + ct
         else:
             prev.text = pt + " " + ct
-        prev.formulas.update(b.formulas)
 
     out: list[list[Block]] = [[] for _ in pages]
     for pi, b in kept:

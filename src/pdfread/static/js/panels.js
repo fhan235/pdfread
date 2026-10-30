@@ -135,10 +135,14 @@ async function qaSend() {
   qaHist.push({ role: "user", content: q });
   const thinking = addQaBubble("assistant", "…");
   const list = $("#qaList");
+  // 捕获发起时的标签与历史数组: 回答回来时已切标签则只写历史, 不污染当前视图
+  const myTab = curTab();
+  const myHist = qaHist;
+  const myDoc = INFO.doc;
   try {
     // 流式(SSE over fetch): delta 事件逐块追加, 边收边渲染
     const r = await libPost("/api/ask-stream", {
-      doc: INFO.doc, question: q, history: qaHist.slice(0, -1),
+      doc: myDoc, question: q, history: myHist.slice(0, -1),
     });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const reader = r.body.getReader();
@@ -157,25 +161,28 @@ async function qaSend() {
         const data = JSON.parse(block.slice(di + 6));
         if (block.startsWith("event: delta")) {
           answer += data.text;
-          thinking.innerHTML = mdRender(answer);
-          list.scrollTop = list.scrollHeight;
+          if (curTab() === myTab) {   // 仍是发起标签才更新气泡
+            thinking.innerHTML = mdRender(answer);
+            list.scrollTop = list.scrollHeight;
+          }
         } else if (block.startsWith("event: failure")) {
           throw new Error(data.message || "请求失败");
         }
       }
     }
     if (!answer) throw new Error("空回答");
-    qaHist.push({ role: "assistant", content: answer });
+    myHist.push({ role: "assistant", content: answer });
   } catch (err) {
-    thinking.textContent = "出错了：" + err;
-    thinking.classList.add("err");
-    qaHist.pop();   // 失败的问题不留在历史里
+    myHist.pop();   // 失败的问题不留在发起方的历史里
+    if (curTab() === myTab) {
+      thinking.textContent = "出错了：" + err;
+      thinking.classList.add("err");
+    }
   }
-  const t = curTab();
-  if (t) t.qaHist = qaHist;
+  if (myTab) myTab.qaHist = myHist;
   qaBusy = false;
   $("#qaSend").disabled = false;
-  list.scrollTop = list.scrollHeight;
+  if (curTab() === myTab) list.scrollTop = list.scrollHeight;
 }
 
 $("#btnQA").onclick = toggleQA;
@@ -242,19 +249,22 @@ async function qaSummary() {
   $("#btnSum").disabled = true;
   addQaBubble("user", "生成速读摘要");
   const thinking = addQaBubble("assistant", "正在速读全文…");
+  const myTab = curTab();   // 同 qaSend: 捕获发起方, 防跨标签污染
+  const myHist = qaHist;
   try {
     const r = await libPost("/api/summary", { doc: INFO.doc });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const d = await r.json();
-    thinking.innerHTML = mdRender(d.answer);
-    qaHist.push({ role: "user", content: "生成速读摘要" },
+    if (curTab() === myTab) thinking.innerHTML = mdRender(d.answer);
+    myHist.push({ role: "user", content: "生成速读摘要" },
                 { role: "assistant", content: d.answer });
   } catch (err) {
-    thinking.textContent = "出错了：" + err;
-    thinking.classList.add("err");
+    if (curTab() === myTab) {
+      thinking.textContent = "出错了：" + err;
+      thinking.classList.add("err");
+    }
   }
-  const t = curTab();
-  if (t) t.qaHist = qaHist;
+  if (myTab) myTab.qaHist = myHist;
   qaBusy = false;
   $("#qaSend").disabled = false;
   $("#btnSum").disabled = false;

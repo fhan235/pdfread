@@ -19,7 +19,6 @@ import webbrowser
 from pathlib import Path
 
 from .paths import default_cache_db, home_roots
-from .translate import TransConfig
 
 
 def _free_port(host: str = "127.0.0.1", start: int = 8011) -> int:
@@ -261,8 +260,9 @@ def main() -> None:
             _open_window(existing)
             return
 
-        provider = os.environ.get("PDFREAD_PROVIDER", "deepseek")
-        cfg = TransConfig(provider=provider)
+        from .settings import translation_config
+        # 恢复保存的服务/模型/地址(环境变量优先), 与 CLI 行为一致
+        cfg = translation_config(provider=os.environ.get("PDFREAD_PROVIDER") or None)
 
         cache = default_cache_db()
         cache.parent.mkdir(parents=True, exist_ok=True)

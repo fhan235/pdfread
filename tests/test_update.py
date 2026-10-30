@@ -117,3 +117,39 @@ def test_updater_script_linux(tmp_path, monkeypatch):
     assert "tar -xzf" in content
     assert str(tmp_path / "app") in content    # 替换安装目录
     assert "nohup" in content                  # 重启新版本
+
+
+def test_close_pool_captures_procs_before_shutdown():
+    """shutdown() 会把 _processes 置 None, terminate 必须用先前抓取的列表。"""
+    terminated = []
+
+    class FakeProc:
+        def is_alive(self): return True
+        def terminate(self): terminated.append(1)
+
+    procs = [FakeProc(), FakeProc()]
+
+    class FakePool:
+        _processes = {0: procs[0], 1: procs[1]}
+
+        def shutdown(self, wait, cancel_futures):
+            self._processes = None   # 与真实 ProcessPoolExecutor 一致
+
+    server._pool = FakePool()
+    try:
+        server._close_pool()
+    finally:
+        server._pool = None
+    assert len(terminated) == 2
+
+
+def test_merge_formulas_renames_on_collision():
+    """两个块各有 F1 时, 缝合后两个公式都要正确还原。"""
+    from pdfread.paper import Block, _merge_formulas, unmask_formulas
+    prev = Block(0, "前文 ⟦F1⟧ 结束", "body", 0.0, {"F1": "x^2"})
+    b = Block(1, "后文 ⟦F1⟧ 结束", "body", 1.0, {"F1": "y_3"})
+    _merge_formulas(prev, b)
+    merged = prev.text + " " + b.text
+    out = unmask_formulas(merged, prev.formulas)
+    assert "x^2" in out and "y_3" in out
+    assert "⟦" not in out
