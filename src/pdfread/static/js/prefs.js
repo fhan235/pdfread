@@ -573,6 +573,12 @@ async function checkUpdate(force) {
   try {
     UPDATE = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
   } catch (e) { return; }   // 离线静默
+  if (UPDATE && UPDATE.update_result) {
+    const r = UPDATE.update_result;
+    $("#runStatus").textContent = r.ok
+      ? `已自动更新到 v${r.version}`
+      : `上次自动更新未成功（目标 v${r.version}），日志见 ${r.log}`;
+  }
   const btn = $("#btnUpdate");
   if (UPDATE && UPDATE.newer && UPDATE.latest !== prefs.skipVersion) {
     btn.style.display = "";
@@ -661,20 +667,42 @@ $("#updDl").onclick = async () => {
   }
 };
 
-/* 一键更新: 下载 + 生成更新器, 确认后退出应用, 外部更新器替换文件并自动重启 */
+/* 一键更新: 下载(带进度条) + 生成更新器, 确认后退出应用,
+   外部更新器替换文件并自动重启 */
+let updBusy = false;
 $("#updApply").onclick = async () => {
-  const h = $("#updHint");
+  if (updBusy) return;
+  const h = $("#updHint"), bar = $("#updBar"), fill = $("#updBar > div");
   if (!UPDATE.asset_url) {
     h.textContent = "该版本没有当前平台的安装包，请到发布页下载";
     h.className = "hint bad";
     return;
   }
-  h.textContent = `正在下载 ${UPDATE.asset_name} …`;
-  h.className = "hint";
+  updBusy = true;
+  bar.style.display = "";
+  const task = Math.random().toString(36).slice(2);
+  const timer = setInterval(async () => {
+    try {
+      const p = await (await fetch("/api/progress?task=" + task)).json();
+      if (p.stage === "download") {
+        if (p.total) {
+          const pct = Math.round(p.done / p.total * 100);
+          fill.style.width = pct + "%";
+          h.textContent = `正在下载 ${UPDATE.asset_name} … ${pct}%`
+            + `（${(p.done / 1048576).toFixed(1)} / ${(p.total / 1048576).toFixed(1)} MB）`;
+        } else {
+          fill.className = "indet";
+          h.textContent = `正在下载 ${UPDATE.asset_name} …`;
+        }
+      }
+    } catch (e) { /* 轮询失败忽略 */ }
+  }, 400);
   try {
-    const r = await fetch("/api/update/apply", { method: "POST" });
+    const r = await fetch("/api/update/apply?task=" + task, { method: "POST" });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const d = await r.json();
+    clearInterval(timer);
+    bar.style.display = "none";
     $("#upd").classList.remove("on");
     if (confirm(`v${d.version} 已下载完成。\n应用将退出并自动完成安装和重启。`
                 + "（配置、翻译缓存、文库、划线全部保留）\n\n现在开始更新？")) {
@@ -686,9 +714,12 @@ $("#updApply").onclick = async () => {
       $("#bye .s").textContent = "若一分钟内没有自动启动，请手动打开 pdfread";
     }
   } catch (e) {
+    clearInterval(timer);
+    bar.style.display = "none";
     h.textContent = "更新失败：" + e;
     h.className = "hint bad";
   }
+  updBusy = false;
 };
 setTimeout(() => checkUpdate(false), 2000);
 

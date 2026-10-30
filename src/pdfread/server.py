@@ -1326,12 +1326,30 @@ async def _latest_release(force: bool = False) -> dict:
     return data
 
 
+def _consume_update_result() -> dict | None:
+    """启动时检查上次自动更新的结果(成功/失败), 只报一次。"""
+    marker = cache_dir() / "update" / "pending.json"
+    try:
+        data = json.loads(marker.read_text("utf-8"))
+        marker.unlink()
+    except Exception:
+        return None
+    from . import __version__
+    want = str(data.get("version", ""))
+    ok = bool(want) and _ver_tuple(__version__) >= _ver_tuple(want)
+    return {"ok": ok, "version": want, "log": str(data.get("log", ""))}
+
+
 @app.get("/api/update/check")
 async def update_check(force: bool = False) -> dict:
-    return await _latest_release(force)
+    data = await _latest_release(force)
+    result = _consume_update_result()
+    if result is not None:
+        data["update_result"] = result
+    return data
 
 
-async def _download_asset(data: dict) -> Path:
+async def _download_asset(data: dict, task: str = "") -> Path:
     """下载最新安装包到缓存目录, 返回路径。只允许本仓库 Release 地址。"""
     url = data.get("asset_url") or ""
     if not data.get("newer") or not url:
@@ -1354,12 +1372,15 @@ async def _download_asset(data: dict) -> Path:
                 if r.status_code != 200:
                     raise HTTPException(502, f"下载失败: HTTP {r.status_code}")
                 size = 0
+                total = int(r.headers.get("content-length") or 0) or None
                 with dest.open("wb") as fh:
                     async for chunk in r.aiter_bytes(1 << 16):
                         size += len(chunk)
                         if size > _UPDATE_MAX:
                             raise HTTPException(413, "安装包过大")
                         fh.write(chunk)
+                        _set_progress(task, "download", size, total)
+        _set_progress(task, "done", 1, 1)
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
@@ -1394,6 +1415,7 @@ def _write_updater(pkg: Path, pid: int) -> Path:
     """生成平台对应的更新器脚本: 等主进程退出 -> 替换 -> 重启。
 
     运行中的程序不能替换自身, 因此由这个脱离主进程的外部脚本完成。
+    每一步都写日志, 便于事后定位失败环节。
     """
     import shlex
     target, exe = _install_target()
@@ -1407,20 +1429,28 @@ def _write_updater(pkg: Path, pid: int) -> Path:
         content = (
             f"$ppid={pid}\n$pkg='{pkg_s}'\n$dest='{target_s}'\n$exe='{exe_s}'\n"
             f"$log='{log_s}'\n"
+            "function step($m) { \"$(Get-Date -Format o) $m\" | Out-File $log -Append }\n"
+            "step 'updater started'\n"
             "try {\n"
             "  while (Get-Process -Id $ppid -ErrorAction SilentlyContinue) "
             "{ Start-Sleep -Milliseconds 500 }\n"
+            "  step 'main process exited'\n"
             "  $tmp = Join-Path $env:TEMP ('pdfread-upd-' + [guid]::NewGuid())\n"
             "  Expand-Archive -LiteralPath $pkg -DestinationPath $tmp -Force\n"
+            "  step 'extracted'\n"
             "  Copy-Item -Path (Join-Path $tmp '*') -Destination $dest -Recurse -Force\n"
+            "  step 'copied'\n"
             "  Remove-Item -Recurse -Force $tmp\n"
             "  Start-Process -FilePath $exe\n"
-            "} catch { $_ | Out-File -FilePath $log }\n"
+            "  step 'relaunched'\n"
+            "} catch { step \"FAILED: $_\" }\n"
         )
     elif sys.platform == "darwin":
         script = work / "update.sh"
         content = (
             "#!/bin/sh\n"
+            f"exec >>{shlex.quote(log_s)} 2>&1\n"
+            "set -x\n"
             f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
             "TMP=$(mktemp -d)\n"
             f"hdiutil attach -nobrowse -quiet -mountpoint \"$TMP/mnt\" {shlex.quote(pkg_s)}\n"
@@ -1429,11 +1459,14 @@ def _write_updater(pkg: Path, pid: int) -> Path:
             f"xattr -cr {shlex.quote(target_s)} 2>/dev/null\n"
             "rm -rf \"$TMP\"\n"
             f"open {shlex.quote(target_s)}\n"
+            "echo DONE\n"
         )
     else:
         script = work / "update.sh"
         content = (
             "#!/bin/sh\n"
+            f"exec >>{shlex.quote(log_s)} 2>&1\n"
+            "set -x\n"
             f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
             "TMP=$(mktemp -d)\n"
             f"tar -xzf {shlex.quote(pkg_s)} -C \"$TMP\"\n"
@@ -1441,22 +1474,33 @@ def _write_updater(pkg: Path, pid: int) -> Path:
             f"chmod +x {shlex.quote(exe_s)}\n"
             "rm -rf \"$TMP\"\n"
             f"nohup {shlex.quote(exe_s)} >/dev/null 2>&1 &\n"
+            "echo DONE\n"
         )
     script.write_text(content, encoding="utf-8")
     return script
 
 
 @app.post("/api/update/apply")
-async def update_apply() -> dict:
+async def update_apply(task: str = "") -> dict:
     """一键更新: 下载安装包 -> 生成并派生更新器 -> 前端随后调用 shutdown。
 
     仅打包后的桌面应用可用(需要可替换的安装目录); 源码模式请用 pip 升级。
+    写入 pending 标记, 下次启动时校验更新结果并在检查接口中回执。
     """
     if not getattr(sys, "frozen", False):
         raise HTTPException(400, "源码/开发模式不支持自动安装，请用 pip 或重新下载")
     data = await _latest_release()
-    pkg = await _download_asset(data)
+    pkg = await _download_asset(data, task)
     script = _write_updater(pkg, os.getpid())
+
+    # 更新回执: 下次启动按版本号判断是否成功
+    try:
+        marker = {"version": data.get("latest", ""), "ts": time.time(),
+                  "log": str(cache_dir() / "update" / "update.log")}
+        (cache_dir() / "update" / "pending.json").write_text(
+            json.dumps(marker, ensure_ascii=False), "utf-8")
+    except OSError:
+        pass
 
     if sys.platform == "win32":
         subprocess.Popen(
