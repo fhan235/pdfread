@@ -720,8 +720,14 @@ $("#updApply").onclick = async () => {
       try { await fetch("/api/shutdown", { method: "POST" }); } catch (e) {}
       $("#bye").classList.add("on");
       document.title = "pdfread 更新中";
-      $("#bye .t").textContent = "正在更新，几秒后自动重启…";
-      $("#bye .s").textContent = "若一分钟内没有自动启动，请手动打开 pdfread";
+      // 服务已退出, 此页面是静态信息页; 把排查所需的路径直接显示出来
+      $("#bye .t").textContent = "正在更新，通常 10–30 秒后自动重启";
+      $("#bye .s").innerHTML =
+        `若没有自动启动：<br>1. 手动打开安装目录的 pdfread：`
+        + `<b>${esc(d.install_dir || "")}</b><br>`
+        + `2. 仍不行就到发布页手动下载：`
+        + `<a href="${esc(UPDATE.page_url)}" target="_blank">${esc(UPDATE.page_url)}</a><br>`
+        + `3. 更新日志（排查用）：${esc(d.log || "")}`;
     }
   } catch (e) {
     clearInterval(timer);

@@ -87,6 +87,7 @@
   #bye.on { display: flex; }
   #bye .t { font-size: 20px; font-weight: 600; }
   #bye .s { color: var(--dim); font-size: 13px; }
+  #bye .s a { color: var(--accent); }
   input, select {
     background: #0e1016; color: var(--fg);
     border: 1px solid var(--line); border-radius: 6px;

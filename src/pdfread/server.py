@@ -1550,7 +1550,9 @@ async def update_apply(task: str = "") -> dict:
                          start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"ok": True, "version": data.get("latest", ""),
-            "message": "更新器已就绪"}
+            "message": "更新器已就绪",
+            "log": str(cache_dir() / "update" / "update.log"),
+            "install_dir": str(_install_target()[0])}
 
 
 # ---------- 页面心跳 / 关页退出看门狗 ----------
