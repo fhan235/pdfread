@@ -129,8 +129,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName": "pdfread",
             "CFBundleDisplayName": "PDF 对照阅读器",
-            "CFBundleShortVersionString": "1.0.4",
-            "CFBundleVersion": "1.0.4",
+            "CFBundleShortVersionString": "1.0.5",
+            "CFBundleVersion": "1.0.5",
             "NSHighResolutionCapable": True,
             # 后台服务型应用, 不在 Dock 常驻图标可改为 True
             "LSBackgroundOnly": False,
