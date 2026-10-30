@@ -125,6 +125,39 @@ LOG_CONFIG = {
 }
 
 
+def _set_window_icon_win32() -> None:
+    """Windows 下用 Win32 API 直接设置窗口/任务栏图标。
+
+    pywebview 6.x 的 icon 参数仅 GTK/QT 支持且属于 start();
+    Windows 上 create_window 传 icon 会 TypeError, 因此等窗口出现后
+    用 FindWindow + WM_SETICON 设置, 大小两档图标分别对应任务栏/标题栏。
+    """
+    try:
+        from .paths import asset_icon
+        icon = asset_icon()
+        if not icon:
+            return
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = 0
+        for _ in range(150):   # 最多等 30 秒窗口出现
+            hwnd = user32.FindWindowW(None, "pdfread")
+            if hwnd:
+                break
+            time.sleep(0.2)
+        if not hwnd:
+            return
+        LR_LOADFROMFILE = 0x10
+        big = user32.LoadImageW(None, str(icon), 1, 32, 32, LR_LOADFROMFILE)
+        small = user32.LoadImageW(None, str(icon), 1, 16, 16, LR_LOADFROMFILE)
+        if big:
+            user32.SendMessageW(hwnd, 0x80, 1, big)     # WM_SETICON, ICON_BIG
+        if small:
+            user32.SendMessageW(hwnd, 0x80, 0, small)   # ICON_SMALL
+    except Exception:
+        pass
+
+
 def _run_native_window(url: str) -> bool:
     """用 pywebview 开原生窗口。
 
@@ -149,27 +182,25 @@ def _run_native_window(url: str) -> bool:
         try:
             from .paths import asset_icon
             icon = asset_icon()
-            if icon:
-                kwargs["icon"] = str(icon)   # pywebview 6.x 支持窗口图标
+            if icon and sys.platform != "win32":
+                kwargs["icon"] = str(icon)   # start(icon=) 仅 GTK/QT 支持
         except Exception:
             pass
+        webview.create_window(
+            "pdfread",
+            url,
+            width=1440,
+            height=900,
+            min_size=(960, 600),
+            text_select=True,
+        )
+        if sys.platform == "win32":
+            # pywebview 不支持 Windows 窗口图标, 用 Win32 后台设置
+            threading.Thread(target=_set_window_icon_win32, daemon=True).start()
         try:
-            webview.create_window(
-                "pdfread",
-                url,
-                width=1440,
-                height=900,
-                min_size=(960, 600),
-                text_select=True,
-                **kwargs,
-            )
+            webview.start(**kwargs)
         except TypeError:
-            # 旧版 pywebview 不支持 icon 参数
-            webview.create_window(
-                "pdfread", url, width=1440, height=900,
-                min_size=(960, 600), text_select=True,
-            )
-        webview.start()
+            webview.start()   # 旧版不支持 icon 参数
         return True
     except Exception:
         return False

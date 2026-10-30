@@ -259,6 +259,16 @@ def static_files(name: str) -> FileResponse:
     return FileResponse(p, headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/icon.png")
+def app_icon() -> FileResponse:
+    """应用图标(网页 favicon / 浏览器应用模式任务栏图标)。"""
+    from .paths import asset_png
+    p = asset_png()
+    if not p:
+        raise HTTPException(404, "图标不存在")
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/api/docs")
 def list_docs() -> dict:
     """列出当前打开的所有文档, 供前端恢复标签栏。"""

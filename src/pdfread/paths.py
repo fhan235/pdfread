@@ -21,6 +21,15 @@ def asset_icon() -> Path | None:
     兼容源码运行与 PyInstaller 打包(_MEIPASS)两种场景。
     """
     name = "icon.ico" if sys.platform == "win32" else "icon.png"
+    return _find_asset(name)
+
+
+def asset_png() -> Path | None:
+    """PNG 图标路径(网页 favicon 用)。"""
+    return _find_asset("icon.png")
+
+
+def _find_asset(name: str) -> Path | None:
     meipass = getattr(sys, "_MEIPASS", None)
     candidates = []
     if meipass:
