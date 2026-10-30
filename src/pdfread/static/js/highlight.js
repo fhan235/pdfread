@@ -192,7 +192,7 @@ function confirmSelection(page, layer, rects, text, x, y) {
   pendingMark = { page, rects, layer, text, x, y };
   const pop = $("#hlConfirm");
   pop.style.display = "flex";   // 两按钮并排
-  pop.style.left = Math.min(x, window.innerWidth - 220) + "px";
+  pop.style.left = Math.min(x, window.innerWidth - 280) + "px";
   pop.style.top = (y + 8) + "px";
 }
 
@@ -290,6 +290,39 @@ $("#hlTr").onclick = async () => {
     showTrPop("翻译失败：" + err, p.x, p.y);
   }
 };
+
+/* 复制选中原文: SVG 页面文字已转路径, 浏览器无法原生选择复制,
+   因此在操作条提供复制按钮, 并接管有选中内容时的 Ctrl/Cmd+C */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    // 非安全上下文兜底
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e2) {}
+    ta.remove();
+  }
+}
+
+$("#hlCopy").onclick = async () => {
+  const p = pendingMark;
+  if (!p || !p.text) return;
+  await copyText(p.text);
+  discardPending();
+  $("#runStatus").textContent = "已复制选中原文";
+};
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c"
+      && pendingMark && window.getSelection().isCollapsed !== false) {
+    copyText(pendingMark.text);
+    $("#runStatus").textContent = "已复制选中原文";
+    e.preventDefault();
+  }
+});
 
 $("#hlDel").onclick = async () => {
   const id = +$("#hlPop").dataset.hid;
