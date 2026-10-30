@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import multiprocessing
 import tempfile
@@ -21,6 +22,7 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
@@ -35,7 +37,7 @@ from fastapi.responses import (
 
 from .library import Library
 from .pdfworker import inspect_pdf, page_words, render_page, render_page_svg
-from .paths import config_dir, static_dir, uploads_dir
+from .paths import cache_dir, config_dir, static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
 MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
@@ -1103,6 +1105,113 @@ async def raw_pdf(doc: str = "") -> FileResponse:
         current.get("fmt"), "application/pdf")
     return FileResponse(current["path"], media_type=mime,
                         headers={"Cache-Control": "no-store"})
+
+
+# ---------- 版本更新 ----------
+
+_UPDATE_REPO = "fhan235/pdfread"
+_UPDATE_TTL = 6 * 3600          # 检查结果缓存 6 小时
+_UPDATE_MAX = 500 * 1024 * 1024  # 安装包上限 500MB
+_update_cache: dict = {"ts": 0.0, "data": None}
+
+
+def _ver_tuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", v)[:4])
+    except ValueError:
+        return (0,)
+
+
+def _pick_asset(assets: list) -> dict | None:
+    """按当前平台挑选安装包。"""
+    want = ("windows-x64.zip" if sys.platform == "win32"
+            else "macos-arm64.dmg" if sys.platform == "darwin"
+            else "linux-x64.tar.gz")
+    for a in assets:
+        if isinstance(a, dict) and str(a.get("name", "")).endswith(want):
+            return a
+    return None
+
+
+async def _latest_release(force: bool = False) -> dict:
+    """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。"""
+    if not force and _update_cache["data"] and \
+            time.time() - _update_cache["ts"] < _UPDATE_TTL:
+        return _update_cache["data"]
+    import httpx
+    from . import __version__
+    data = {"current": __version__, "newer": False, "error": ""}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(
+                f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
+                headers={"User-Agent": f"pdfread/{__version__}",
+                         "Accept": "application/vnd.github+json"})
+        if r.status_code == 200:
+            rel = r.json()
+            latest = str(rel.get("tag_name", "")).lstrip("v")
+            asset = _pick_asset(rel.get("assets") or [])
+            data.update({
+                "latest": latest,
+                "newer": _ver_tuple(latest) > _ver_tuple(__version__),
+                "notes": str(rel.get("body", ""))[:4000],
+                "page_url": str(rel.get("html_url", "")),
+                "asset_name": asset and asset.get("name") or "",
+                "asset_url": asset and asset.get("browser_download_url") or "",
+            })
+        else:
+            data["error"] = f"HTTP {r.status_code}"
+    except Exception as exc:
+        data["error"] = str(exc)[:200]
+    _update_cache.update(ts=time.time(), data=data)
+    return data
+
+
+@app.get("/api/update/check")
+async def update_check(force: bool = False) -> dict:
+    return await _latest_release(force)
+
+
+@app.post("/api/update/download")
+async def update_download() -> dict:
+    """下载最新安装包到缓存目录。只允许本仓库 Release 的资源地址。"""
+    data = await _latest_release()
+    url = data.get("asset_url") or ""
+    if not data.get("newer") or not url:
+        raise HTTPException(400, data.get("error") or "没有可用的新版本")
+    parts = urlsplit(url)
+    allowed = (parts.hostname == "github.com"
+               and parts.path.startswith(f"/{_UPDATE_REPO}/releases/download/"))
+    if parts.scheme != "https" or not allowed:
+        raise HTTPException(400, "下载地址不合法")
+
+    import httpx
+    dest_dir = cache_dir() / "downloads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / data["asset_name"]
+    try:
+        async with httpx.AsyncClient(timeout=60.0,
+                                     follow_redirects=True) as client:
+            async with client.stream(
+                    "GET", url,
+                    headers={"User-Agent": "pdfread-updater"}) as r:
+                if r.status_code != 200:
+                    raise HTTPException(502, f"下载失败: HTTP {r.status_code}")
+                size = 0
+                with dest.open("wb") as fh:
+                    async for chunk in r.aiter_bytes(1 << 16):
+                        size += len(chunk)
+                        if size > _UPDATE_MAX:
+                            raise HTTPException(413, "安装包过大")
+                        fh.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(502, f"下载失败: {exc}") from None
+    return {"path": str(dest), "name": dest.name, "size": size,
+            "version": data.get("latest", "")}
 
 
 @app.post("/api/shutdown")

@@ -360,6 +360,24 @@
   #busy .busywrap { max-width: none; margin: 0; }
   #busy .busymsg { margin-bottom: 8px; }
 
+  /* ---------- 版本更新 ---------- */
+  #btnUpdate { border-color: var(--accent); color: var(--accent); }
+  #upd { display: none; position: fixed; inset: 0; z-index: 65;
+         background: #000000b0; align-items: center; justify-content: center; }
+  #upd.on { display: flex; }
+  #upd .box { width: min(520px, 92vw); max-height: 80vh; overflow: hidden;
+              border-radius: 10px; display: flex; flex-direction: column;
+              background: var(--panel); border: 1px solid var(--line);
+              box-shadow: 0 18px 50px #000000a0; }
+  #upd .bar { display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+              border-bottom: 1px solid var(--line); }
+  #upd .body { padding: 14px 16px; overflow-y: auto; }
+  #updNotes { white-space: pre-wrap; word-break: break-word; font-size: 12.5px;
+              font-family: inherit; color: var(--fg); margin: 0 0 10px;
+              max-height: 40vh; overflow-y: auto; }
+  #upd .hint { font-size: 12px; color: var(--dim); min-height: 17px; }
+  #upd .acts { display: flex; gap: 8px; margin-top: 10px; }
+
   /* ---------- 拖放提示 ---------- */
   #drop { display: none; position: fixed; inset: 0; z-index: 60;
           background: #4f8cff22; border: 3px dashed var(--accent);

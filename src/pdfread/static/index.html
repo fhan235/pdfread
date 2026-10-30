@@ -46,6 +46,7 @@
   <button id="btnTheme" class="ghost" title="切换深色/浅色主题">深色</button>
 
   <!-- 工具 -->
+  <button id="btnUpdate" class="ghost" title="发现新版本" style="display:none">⬆ 新版</button>
   <button id="btnQA" class="ghost" title="基于当前文档的 AI 问答">AI 问答</button>
   <button id="btnCfg" class="ghost" title="翻译服务与密钥">设置</button>
 
@@ -187,6 +188,25 @@
   </div>
 </div>
 <div id="busy" role="status"></div>
+<div id="upd">
+  <div class="box">
+    <div class="bar">
+      <b>发现新版本 <span id="updVer"></span></b>
+      <span class="spacer"></span>
+      <button id="updClose" class="ghost">关闭</button>
+    </div>
+    <div class="body">
+      <pre id="updNotes"></pre>
+      <div class="hint" id="updHint"></div>
+      <div class="acts">
+        <button id="updSkip" class="ghost">忽略此版本</button>
+        <span class="spacer"></span>
+        <button id="updPage" class="ghost">查看发布页</button>
+        <button id="updDl">下载更新</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="drop">松手即可打开该文件</div>
 <div id="bye">
   <div class="t">pdfread 已退出</div>

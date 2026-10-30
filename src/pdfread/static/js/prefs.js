@@ -563,6 +563,63 @@ $("#btnThemeReset").onclick = () => {
   applyPrefs();
 };
 
+/* 版本更新: 启动后静默检查 GitHub 最新 Release, 有新版则顶栏出现提示 */
+let UPDATE = null;
+async function checkUpdate(force) {
+  try {
+    UPDATE = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
+  } catch (e) { return; }   // 离线静默
+  const btn = $("#btnUpdate");
+  if (UPDATE && UPDATE.newer && UPDATE.latest !== prefs.skipVersion) {
+    btn.style.display = "";
+    btn.title = `发现新版本 v${UPDATE.latest}（当前 v${UPDATE.current}）`;
+  } else {
+    btn.style.display = "none";
+  }
+}
+$("#btnUpdate").onclick = () => {
+  if (!UPDATE || !UPDATE.newer) return;
+  $("#updVer").textContent = `v${UPDATE.latest}`;
+  $("#updNotes").textContent = UPDATE.notes || "（无更新说明）";
+  const h = $("#updHint");
+  h.textContent = `当前版本 v${UPDATE.current}`;
+  h.className = "hint";
+  $("#upd").classList.add("on");
+};
+$("#updClose").onclick = () => $("#upd").classList.remove("on");
+$("#upd").addEventListener("click", (e) => {
+  if (e.target.id === "upd") $("#upd").classList.remove("on");
+});
+$("#updSkip").onclick = () => {
+  prefs.skipVersion = UPDATE.latest;
+  savePrefs();
+  $("#upd").classList.remove("on");
+  $("#btnUpdate").style.display = "none";
+};
+$("#updPage").onclick = () => window.open(UPDATE.page_url, "_blank");
+$("#updDl").onclick = async () => {
+  const h = $("#updHint");
+  if (!UPDATE.asset_url) {
+    h.textContent = "该版本没有当前平台的安装包，请到发布页下载";
+    h.className = "hint bad";
+    return;
+  }
+  h.textContent = `正在下载 ${UPDATE.asset_name} …`;
+  h.className = "hint";
+  try {
+    const r = await fetch("/api/update/download", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    h.textContent = `已下载 v${d.version}：${d.path}`
+      + " —— 退出应用后用新文件替换即可，配置与缓存不受影响";
+    h.className = "hint ok";
+  } catch (e) {
+    h.textContent = "下载失败：" + e;
+    h.className = "hint bad";
+  }
+};
+setTimeout(() => checkUpdate(false), 2000);
+
 /* 启动: 先恢复阅读偏好, 再加载 */
 buildThemeGrid();
 loadPrefs();
