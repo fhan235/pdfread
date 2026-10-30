@@ -12,7 +12,9 @@ from __future__ import annotations
 import os
 import multiprocessing
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -255,6 +257,90 @@ def _write_runtime(port: int) -> None:
         )
     except OSError:
         pass
+
+
+def run_updater(pkg: Path, pid: int) -> None:
+    """以独立进程运行的更新器: 等主进程退出 -> 替换 -> 重启。
+
+    由 `pdfread --apply-update PKG PID` 进入。不用脚本解释器
+    (PowerShell/cmd 易被安全软件拦截), 全程 Python 标准库。
+    """
+    import shutil
+    import zipfile
+
+    from .paths import cache_dir, install_target
+
+    log_path = cache_dir() / "update" / "update.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def step(msg: str) -> None:
+        try:
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
+        except OSError:
+            pass
+
+    step(f"updater started, pkg={pkg}, pid={pid}")
+    target, exe = install_target()
+    try:
+        # 等主进程退出(最多 2 分钟), 再多等 1 秒让文件句柄释放
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.5)
+        time.sleep(1)
+        step("main process exited")
+
+        tmp = Path(tempfile.mkdtemp(prefix="pdfread-upd-"))
+        try:
+            if sys.platform == "darwin":
+                mnt = tmp / "mnt"
+                mnt.mkdir()
+                subprocess.run(
+                    ["hdiutil", "attach", "-nobrowse", "-quiet",
+                     "-mountpoint", str(mnt), str(pkg)], check=True)
+                step("dmg mounted")
+                subprocess.run(["ditto", str(mnt / "pdfread.app"),
+                                str(target)], check=True)
+                subprocess.run(["hdiutil", "detach", "-quiet", str(mnt)])
+                subprocess.run(["xattr", "-cr", str(target)],
+                               capture_output=True)
+                step("app replaced")
+            elif sys.platform == "win32":
+                with zipfile.ZipFile(pkg) as zf:
+                    zf.extractall(tmp)
+                step("zip extracted")
+                shutil.copytree(tmp, target, dirs_exist_ok=True)
+                step("files copied")
+            else:
+                import tarfile
+                with tarfile.open(pkg) as tf:
+                    tf.extractall(tmp)
+                step("tar extracted")
+                shutil.copytree(tmp / "pdfread", target, dirs_exist_ok=True)
+                exe.chmod(0o755)
+                step("files copied")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "win32":
+            subprocess.Popen(
+                [str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.DETACHED_PROCESS)
+        else:
+            subprocess.Popen([str(exe)], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        step("relaunched, updater done")
+    except Exception as exc:
+        step(f"FAILED: {type(exc).__name__}: {exc}")
 
 
 def main() -> None:

@@ -9,6 +9,14 @@ if __name__ == "__main__":
     import multiprocessing
     import sys
 
+    # 更新器模式: `pdfread --apply-update PKG PID`, 作为独立进程完成
+    # 替换与重启, 不走脚本解释器(避免被杀毒软件拦截 PowerShell)
+    if len(sys.argv) >= 4 and sys.argv[1] == "--apply-update":
+        from pathlib import Path
+        from pdfread.app import run_updater
+        run_updater(Path(sys.argv[2]), int(sys.argv[3]))
+        raise SystemExit(0)
+
     # macOS: multiprocessing 子进程(worker / resource_tracker)会重新
     # 执行本入口, 在 freeze_support 接管前先把它们的 Dock 图标隐藏。
     # freeze_support 对子进程不会返回, 因此这之后的代码只在主进程执行。

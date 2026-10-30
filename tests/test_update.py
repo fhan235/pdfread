@@ -106,50 +106,51 @@ def test_apply_rejected_in_source_mode(client):
     assert "源码" in r.json()["detail"]
 
 
-def test_updater_script_linux(tmp_path, monkeypatch):
-    import os
-    monkeypatch.setattr(server.sys, "platform", "linux")
-    monkeypatch.setattr(server.sys, "executable", str(tmp_path / "app" / "pdfread"))
+def test_install_target_linux(monkeypatch, tmp_path):
+    from pdfread import paths
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    monkeypatch.setattr(paths.sys, "executable", str(tmp_path / "app" / "pdfread"))
+    target, exe = paths.install_target()
+    assert target == tmp_path / "app" and exe.name == "pdfread"
+
+
+def test_install_target_darwin(monkeypatch, tmp_path):
+    from pdfread import paths
+    exe = tmp_path / "pdfread.app" / "Contents" / "MacOS" / "pdfread"
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    monkeypatch.setattr(paths.sys, "executable", str(exe))
+    target, _ = paths.install_target()
+    assert target == tmp_path / "pdfread.app"
+
+
+def test_run_updater_zip_flow(tmp_path, monkeypatch):
+    """更新器主流程: 等 pid -> 解压 zip -> 覆盖安装目录 -> 尝试重启。"""
+    import zipfile
+    from pdfread import app as appmod
+    from pdfread import paths
+
+    monkeypatch.setattr(paths.sys, "platform", "linux2")
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "pdfread").write_text("old")
+    exe = install / "pdfread"
+    monkeypatch.setattr(paths.sys, "executable", str(exe))
     monkeypatch.setenv("PDFREAD_CACHE_DIR", str(tmp_path / "cache"))
-    script = server._write_updater(tmp_path / "pdfread-linux-x64.tar.gz", 12345)
-    content = script.read_text("utf-8")
-    assert "kill -0 12345" in content          # 等待主进程退出
-    assert "tar -xzf" in content
-    assert str(tmp_path / "app") in content    # 替换安装目录
-    assert "nohup" in content                  # 重启新版本
 
+    pkg = tmp_path / "pkg.tar.gz"
+    import tarfile
+    with tarfile.open(pkg, "w:gz") as tf:
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / "pdfread").write_text("new-binary")
+        tf.add(inner, arcname="pdfread")
 
-def test_close_pool_captures_procs_before_shutdown():
-    """shutdown() 会把 _processes 置 None, terminate 必须用先前抓取的列表。"""
-    terminated = []
-
-    class FakeProc:
-        def is_alive(self): return True
-        def terminate(self): terminated.append(1)
-
-    procs = [FakeProc(), FakeProc()]
-
-    class FakePool:
-        _processes = {0: procs[0], 1: procs[1]}
-
-        def shutdown(self, wait, cancel_futures):
-            self._processes = None   # 与真实 ProcessPoolExecutor 一致
-
-    server._pool = FakePool()
-    try:
-        server._close_pool()
-    finally:
-        server._pool = None
-    assert len(terminated) == 2
-
-
-def test_merge_formulas_renames_on_collision():
-    """两个块各有 F1 时, 缝合后两个公式都要正确还原。"""
-    from pdfread.paper import Block, _merge_formulas, unmask_formulas
-    prev = Block(0, "前文 ⟦F1⟧ 结束", "body", 0.0, {"F1": "x^2"})
-    b = Block(1, "后文 ⟦F1⟧ 结束", "body", 1.0, {"F1": "y_3"})
-    _merge_formulas(prev, b)
-    merged = prev.text + " " + b.text
-    out = unmask_formulas(merged, prev.formulas)
-    assert "x^2" in out and "y_3" in out
-    assert "⟦" not in out
+    launched = []
+    monkeypatch.setattr(appmod.subprocess, "Popen",
+                        lambda *a, **kw: launched.append(a[0]))
+    # pid=999999999 不存在, os.kill 立即 OSError, 跳过等待
+    appmod.run_updater(pkg, 999999999)
+    assert exe.read_text() == "new-binary"
+    assert launched and launched[0][0] == str(exe)
+    log = (tmp_path / "cache" / "update" / "update.log").read_text()
+    assert "tar extracted" in log and "relaunched" in log

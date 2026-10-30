@@ -1433,126 +1433,48 @@ async def update_download() -> dict:
             "version": data.get("latest", "")}
 
 
-def _install_target() -> tuple[Path, Path]:
-    """返回 (安装目录, 可执行入口)。macOS 为 (.app 包路径, 同名入口)。"""
-    exe = Path(sys.executable).resolve()
-    if sys.platform == "darwin":
-        # .../pdfread.app/Contents/MacOS/pdfread -> .app 包
-        app = exe
-        while app.suffix != ".app" and app != app.parent:
-            app = app.parent
-        return app, exe
-    return exe.parent, exe
-
-
-def _write_updater(pkg: Path, pid: int) -> Path:
-    """生成平台对应的更新器脚本: 等主进程退出 -> 替换 -> 重启。
-
-    运行中的程序不能替换自身, 因此由这个脱离主进程的外部脚本完成。
-    每一步都写日志, 便于事后定位失败环节。
-    """
-    import shlex
-    target, exe = _install_target()
-    work = cache_dir() / "update"
-    work.mkdir(parents=True, exist_ok=True)
-    log = work / "update.log"
-    pkg_s, target_s, exe_s, log_s = (str(pkg), str(target), str(exe), str(log))
-
-    if sys.platform == "win32":
-        script = work / "update.ps1"
-        content = (
-            f"$ppid={pid}\n$pkg='{pkg_s}'\n$dest='{target_s}'\n$exe='{exe_s}'\n"
-            f"$log='{log_s}'\n"
-            "function step($m) { \"$(Get-Date -Format o) $m\" | Out-File $log -Append }\n"
-            "step 'updater started'\n"
-            "try {\n"
-            "  while (Get-Process -Id $ppid -ErrorAction SilentlyContinue) "
-            "{ Start-Sleep -Milliseconds 500 }\n"
-            "  step 'main process exited'\n"
-            "  $tmp = Join-Path $env:TEMP ('pdfread-upd-' + [guid]::NewGuid())\n"
-            "  Expand-Archive -LiteralPath $pkg -DestinationPath $tmp -Force\n"
-            "  step 'extracted'\n"
-            "  Copy-Item -Path (Join-Path $tmp '*') -Destination $dest -Recurse -Force\n"
-            "  step 'copied'\n"
-            "  Remove-Item -Recurse -Force $tmp\n"
-            "  Start-Process -FilePath $exe\n"
-            "  step 'relaunched'\n"
-            "} catch { step \"FAILED: $_\" }\n"
-        )
-    elif sys.platform == "darwin":
-        script = work / "update.sh"
-        content = (
-            "#!/bin/sh\n"
-            f"exec >>{shlex.quote(log_s)} 2>&1\n"
-            "set -x\n"
-            f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
-            "TMP=$(mktemp -d)\n"
-            f"hdiutil attach -nobrowse -quiet -mountpoint \"$TMP/mnt\" {shlex.quote(pkg_s)}\n"
-            f"ditto \"$TMP/mnt/pdfread.app\" {shlex.quote(target_s)}\n"
-            "hdiutil detach -quiet \"$TMP/mnt\"\n"
-            f"xattr -cr {shlex.quote(target_s)} 2>/dev/null\n"
-            "rm -rf \"$TMP\"\n"
-            f"open {shlex.quote(target_s)}\n"
-            "echo DONE\n"
-        )
-    else:
-        script = work / "update.sh"
-        content = (
-            "#!/bin/sh\n"
-            f"exec >>{shlex.quote(log_s)} 2>&1\n"
-            "set -x\n"
-            f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done\n"
-            "TMP=$(mktemp -d)\n"
-            f"tar -xzf {shlex.quote(pkg_s)} -C \"$TMP\"\n"
-            f"cp -a \"$TMP/pdfread/.\" {shlex.quote(target_s)}/\n"
-            f"chmod +x {shlex.quote(exe_s)}\n"
-            "rm -rf \"$TMP\"\n"
-            f"nohup {shlex.quote(exe_s)} >/dev/null 2>&1 &\n"
-            "echo DONE\n"
-        )
-    script.write_text(content, encoding="utf-8")
-    return script
-
-
 @app.post("/api/update/apply")
 async def update_apply(task: str = "") -> dict:
-    """一键更新: 下载安装包 -> 生成并派生更新器 -> 前端随后调用 shutdown。
+    """一键更新: 下载安装包 -> 派生自身 exe 作为更新器 -> 前端随后调用 shutdown。
 
     仅打包后的桌面应用可用(需要可替换的安装目录); 源码模式请用 pip 升级。
-    写入 pending 标记, 下次启动时校验更新结果并在检查接口中回执。
+    更新器是应用自身的第二个进程(--apply-update), 不走脚本解释器,
+    避免 PowerShell 脚本被杀毒软件拦截。写入 pending 标记,
+    下次启动时校验更新结果并在检查接口中回执。
     """
     if not getattr(sys, "frozen", False):
         raise HTTPException(400, "源码/开发模式不支持自动安装，请用 pip 或重新下载")
     data = await _latest_release()
     pkg = await _download_asset(data, task)
-    script = _write_updater(pkg, os.getpid())
 
     # 更新回执: 下次启动按版本号判断是否成功
+    log_path = cache_dir() / "update" / "update.log"
     try:
         marker = {"version": data.get("latest", ""), "ts": time.time(),
-                  "log": str(cache_dir() / "update" / "update.log")}
+                  "log": str(log_path)}
+        (cache_dir() / "update").mkdir(parents=True, exist_ok=True)
         (cache_dir() / "update" / "pending.json").write_text(
             json.dumps(marker, ensure_ascii=False), "utf-8")
     except OSError:
         pass
 
+    from .paths import install_target
+    args = [sys.executable, "--apply-update", str(pkg), str(os.getpid())]
     if sys.platform == "win32":
         subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
-             "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            args,
             creationflags=subprocess.CREATE_NO_WINDOW
             | subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.DETACHED_PROCESS,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     else:
-        subprocess.Popen(["/bin/sh", str(script)],
-                         start_new_session=True,
+        subprocess.Popen(args, start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"ok": True, "version": data.get("latest", ""),
             "message": "更新器已就绪",
-            "log": str(cache_dir() / "update" / "update.log"),
-            "install_dir": str(_install_target()[0])}
+            "log": str(log_path),
+            "install_dir": str(install_target()[0])}
 
 
 # ---------- 页面心跳 / 关页退出看门狗 ----------

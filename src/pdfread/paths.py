@@ -42,6 +42,20 @@ def _find_asset(name: str) -> Path | None:
     return None
 
 
+def install_target() -> tuple[Path, Path]:
+    """返回 (安装目录, 可执行入口)。macOS 为 (.app 包路径, 包内入口)。
+
+    供一键更新定位要替换的位置; 仅打包(frozen)后的路径有意义。
+    """
+    exe = Path(sys.executable).resolve()
+    if sys.platform == "darwin":
+        app = exe
+        while app.suffix != ".app" and app != app.parent:
+            app = app.parent
+        return app, exe
+    return exe.parent, exe
+
+
 def static_dir() -> Path:
     """前端静态资源目录。"""
     # PyInstaller 打包后资源被解压到 _MEIPASS
