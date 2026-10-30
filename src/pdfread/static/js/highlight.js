@@ -263,10 +263,11 @@ $("#hlOk").onclick = async () => {
   }
 };
 
-/* 点击已有划线 -> 删除浮层 */
+/* 点击已有划线 -> 删除浮层。只认 .hlayer 内的高亮: EPUB/TXT 章节内容
+   与应用同 DOM, 书里的 class="hl" 元素不得触发应用操作 */
 left.addEventListener("click", (e) => {
   const hl = e.target.closest(".hl");
-  if (!hl || !hl.dataset.hid) return;
+  if (!hl || !hl.dataset.hid || !hl.closest(".hlayer")) return;
   const pop = $("#hlPop");
   pop.dataset.hid = hl.dataset.hid;
   pop.style.display = "block";

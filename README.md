@@ -195,7 +195,8 @@ pyinstaller --noconfirm pdfread.spec
 
 产物在 `dist/`。注意 PyInstaller **不支持交叉编译**，需在目标系统上构建。
 本仓库的 GitHub Actions 在主分支、PR 和 `v*` 标签触发测试与三平台构建；标签构建通过后发布 Release。
-CI 使用 `uv.lock` 固定依赖；不再单独构建 Intel Mac（runner 排队过久），Intel 机型经 Rosetta 2 运行 arm64 版。
+CI 使用 `uv.lock` 固定依赖；不再单独构建 Intel Mac（runner 排队过久），
+Intel 机型请从源码运行（Rosetta 2 是 ARM 跑 x86，反向不支持）。
 
 ## 开发验证
 

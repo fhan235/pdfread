@@ -77,7 +77,7 @@ function buildThemeGrid() {
       prefs.themeCustom[inp.dataset.var] = inp.value;
       document.body.style.setProperty("--" + inp.dataset.var, inp.value);
     });
-    inp.addEventListener("change", savePrefs);
+    inp.addEventListener("change", () => { savePrefs(); applyPrefs(); });
   });
 }
 
@@ -571,8 +571,12 @@ $("#btnThemeReset").onclick = () => {
 let UPDATE = null;
 async function checkUpdate(force) {
   try {
-    UPDATE = await (await fetch("/api/update/check" + (force ? "?force=1" : ""))).json();
-  } catch (e) { return; }   // 离线静默
+    const r = await fetch("/api/update/check" + (force ? "?force=1" : ""));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    if (!d || typeof d !== "object" || (!d.latest && !d.error)) throw new Error("bad payload");
+    UPDATE = d;
+  } catch (e) { return false; }   // 离线静默, 保留旧 UPDATE 不清空按钮状态
   if (UPDATE && UPDATE.update_result) {
     const r = UPDATE.update_result;
     $("#runStatus").textContent = r.ok
@@ -586,6 +590,7 @@ async function checkUpdate(force) {
   } else {
     btn.style.display = "none";
   }
+  return true;
 }
 function openUpdateDialog() {
   if (!UPDATE || !UPDATE.newer) return;
@@ -630,7 +635,12 @@ $("#btnCheckUpd").onclick = async () => {
   const h = $("#updCheckHint");
   h.textContent = "正在检查更新…";
   h.className = "hint";
-  await checkUpdate(true);
+  const ok = await checkUpdate(true);
+  if (!ok) {
+    h.textContent = "检查失败：网络异常或 GitHub 无法访问";
+    h.className = "hint bad";
+    return;
+  }
   if (!UPDATE || (!UPDATE.latest && UPDATE.error)) {
     h.textContent = "检查失败：" + ((UPDATE && UPDATE.error) || "网络错误");
     h.className = "hint bad";

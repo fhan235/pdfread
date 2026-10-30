@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -245,6 +246,8 @@ class Library:
                 x0, y0, x1, y1 = (float(v) for v in r)
             except (TypeError, ValueError):
                 raise ValueError("高亮坐标必须是数字") from None
+            if not all(map(math.isfinite, (x0, y0, x1, y1))):
+                raise ValueError("高亮坐标必须是有限数字")  # NaN/Inf 会破坏 JSON 序列化
             if x1 <= x0 or y1 <= y0 or max(x0, y0, x1, y1) > 10000:
                 raise ValueError("高亮矩形范围无效")
             norm.append([round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)])

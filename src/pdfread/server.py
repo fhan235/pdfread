@@ -716,17 +716,26 @@ async def set_settings(payload: dict, doc: str = "") -> dict:
     """保存密钥 / 切换服务。密钥写入用户配置文件(权限 0600)。"""
     from .settings import profile, set_proxy, update_translation
     old = STATE["cfg"] or TransConfig()
+    provider = str(payload.get("provider", old.provider)).strip()
+    if provider not in PROVIDERS:
+        raise HTTPException(400, "未知翻译服务")
     proxy = payload.get("proxy")
     if proxy is not None:
         if not isinstance(proxy, str):
             raise HTTPException(400, "设置值必须为字符串")
         proxy = proxy.strip()
-        if proxy and not re.match(r"^https?://[^\s/]+(:\d+)?/?$", proxy):
-            raise HTTPException(400, "代理地址格式应为 http://主机:端口")
+        if proxy:
+            p = urlsplit(proxy)
+            if p.scheme not in ("http", "https") or not p.hostname \
+                    or p.username or p.password:
+                raise HTTPException(400, "代理地址格式应为 http://主机:端口，不含账号密码")
+            try:
+                port = p.port
+            except ValueError:
+                raise HTTPException(400, "代理端口无效") from None
+            if port is not None and not (1 <= port <= 65535):
+                raise HTTPException(400, "代理端口无效")
         set_proxy(proxy)
-    provider = str(payload.get("provider", old.provider)).strip()
-    if provider not in PROVIDERS:
-        raise HTTPException(400, "未知翻译服务")
     saved = profile(provider)
     model = payload.get("model", old.model if provider == old.provider else saved.get("model", ""))
     base_url = payload.get("base_url", old.base_url if provider == old.provider else saved.get("base_url", ""))
@@ -797,8 +806,11 @@ async def epub_resource(num: int, path: str = Query(...), doc: str = "") -> Resp
         data, mime = read_resource(str(current["path"]), path)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from None
-    return Response(data, media_type=mime,
-                    headers={"Cache-Control": "private, max-age=3600"})
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if mime == "image/svg+xml":
+        # SVG 以主动文档打开可执行脚本; sandbox 头禁止脚本与同源访问
+        headers["Content-Security-Policy"] = "sandbox"
+    return Response(data, media_type=mime, headers=headers)
 
 
 @app.get("/api/page/{num}.svg")
@@ -1287,7 +1299,7 @@ async def _latest_release(force: bool = False) -> dict:
     """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。
 
     网页端(releases/latest 302 跳转)优先: 不占未认证 API 的限流配额;
-    API 仅用于尽力补全更新说明(被限流也不影响主流程)。
+    网页端失败时仍尝试 API(两条通道互为备份); 两通道版本号一致才合并。
     """
     if not force and _update_cache["data"] and \
             time.time() - _update_cache["ts"] < _UPDATE_TTL:
@@ -1298,33 +1310,54 @@ async def _latest_release(force: bool = False) -> dict:
         async with _update_client(timeout=8.0) as client:
             fb = await _fallback_latest(client)
             if not fb:
+                # 网页端失败, 退到 API(可能 API 通而网页端不通)
+                fb = await _api_latest(client)
+            elif fb:
+                # 网页端成功时, 尽力用 API 富化(更新说明/精确资产),
+                # 但两通道版本号必须一致才合并, 防止版本与下载地址混搭
+                api = await _api_latest(client)
+                if api and api["latest"] == fb["latest"]:
+                    fb["notes"] = api["notes"]
+                    if api["asset_url"]:
+                        fb["asset_name"] = api["asset_name"]
+                        fb["asset_url"] = api["asset_url"]
+                    fb["fallback"] = False
+            if not fb:
                 data["error"] = ("无法访问 GitHub，请检查网络/代理"
                                  "（强制代理环境可在设置 → 关于中手动填写代理地址）")
             else:
                 data.update(fb)
                 data["newer"] = _ver_tuple(fb["latest"]) > _ver_tuple(__version__)
-                data["fallback"] = True
-                # 尽力用 API 补全更新说明与精确资产信息; 限流/失败均可容忍
-                try:
-                    r = await client.get(
-                        f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
-                        headers={"User-Agent": f"pdfread/{__version__}",
-                                 "Accept": "application/vnd.github+json"})
-                    if r.status_code == 200:
-                        rel = r.json()
-                        asset = _pick_asset(rel.get("assets") or [])
-                        data["notes"] = str(rel.get("body", ""))[:4000]
-                        data["fallback"] = False
-                        if asset:
-                            data["asset_name"] = asset.get("name", "")
-                            data["asset_url"] = asset.get("browser_download_url", "")
-                except Exception:
-                    pass
+                data["fallback"] = fb.get("fallback", False)
     except Exception as exc:
         data["error"] = (f"网络请求失败: {str(exc)[:150]}"
                          "（强制代理环境可在设置 → 关于中手动填写代理地址）")
     _update_cache.update(ts=time.time(), data=data)
     return data
+
+
+async def _api_latest(client) -> dict | None:
+    """经 GitHub API 查询最新 Release(更新说明 + 精确资产)。"""
+    try:
+        r = await client.get(
+            f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
+            headers={"User-Agent": "pdfread-updater",
+                     "Accept": "application/vnd.github+json"})
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    rel = r.json()
+    latest = str(rel.get("tag_name", "")).lstrip("v")
+    asset = _pick_asset(rel.get("assets") or [])
+    return {
+        "latest": latest,
+        "notes": str(rel.get("body", ""))[:4000],
+        "page_url": str(rel.get("html_url", "")),
+        "asset_name": asset and asset.get("name") or "",
+        "asset_url": asset and asset.get("browser_download_url") or "",
+        "fallback": False,
+    }
 
 
 def _consume_update_result() -> dict | None:
@@ -1543,7 +1576,11 @@ def pagehide() -> dict:
 
 
 def enable_page_watchdog() -> None:
-    """开启关页看门狗(仅桌面版浏览器回退模式调用)。"""
+    """开启关页看门狗(仅桌面版浏览器回退模式调用)。
+
+    两道保险: pagehide 显式倒计时; 以及心跳消失兜底(浏览器被强杀/
+    崩溃时 beacon 可能没送出)。后台标签节流(约 1 次/分钟)不会误伤。
+    """
     if _HEARTBEAT["enabled"]:
         return
     _HEARTBEAT["enabled"] = True
@@ -1551,8 +1588,10 @@ def enable_page_watchdog() -> None:
     def loop() -> None:
         while True:
             time.sleep(2)
+            now = time.time()
             kill_at = _HEARTBEAT["kill_at"]
-            if kill_at and time.time() >= kill_at:
+            gone = _HEARTBEAT["last"] and now - _HEARTBEAT["last"] > 180
+            if (kill_at and now >= kill_at) or gone:
                 _close_pool()
                 os._exit(0)
 

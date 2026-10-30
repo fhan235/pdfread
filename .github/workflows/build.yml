@@ -26,7 +26,7 @@ jobs:
             name: linux-x64
           # 不再单独构建 Intel Mac(macos-13):
           # GitHub 的 Intel runner 资源紧张, 任务长期排队阻塞整条流水线。
-          # Intel 机型可通过 Rosetta 2 运行 arm64 版本。
+          # Intel 机型请从源码运行(pip 安装), Rosetta 方向不支持。
 
     runs-on: ${{ matrix.os }}
     # 避免个别 runner 资源紧张时长期占用队列
@@ -81,12 +81,14 @@ jobs:
           ln -s /Applications dmg/Applications
           # hdiutil 偶发 Resource busy(系统服务短暂占用卷), 先卸残留卷再重试
           hdiutil detach /Volumes/pdfread 2>/dev/null || true
+          ok=0
           for i in 1 2 3 4; do
-            hdiutil create -volname "pdfread" -srcfolder dmg -ov -format UDZO \
-              "pdfread-${{ matrix.name }}.dmg" && break
+            if hdiutil create -volname "pdfread" -srcfolder dmg -ov -format UDZO \
+              "pdfread-${{ matrix.name }}.dmg"; then ok=1; break; fi
             echo "hdiutil 第 $i 次失败, 3 秒后重试"
             sleep 3
           done
+          [ "$ok" = 1 ] || { echo "hdiutil 重试 4 次均失败"; exit 1; }
 
       # ---------- Linux: 打包成 tar.gz ----------
       - name: Package (Linux)
@@ -124,11 +126,11 @@ jobs:
             | 系统 | 文件 |
             |---|---|
             | Windows | `pdfread-windows-x64.zip` |
-            | macOS | `pdfread-macos-arm64.dmg` |
+            | macOS | `pdfread-macos-arm64.dmg`（Apple Silicon） |
             | Linux | `pdfread-linux-x64.tar.gz` |
 
-            > Intel 芯片的 Mac 也下载上面这个 dmg，首次打开时系统会自动通过
-            > Rosetta 2 运行（若未安装会提示一键安装）。
+            > macOS 包为 Apple Silicon（M 系列）专用。Intel 芯片的 Mac 暂不支持，
+            > 请从源码运行：`pip install .` 后执行 `pdfread`。
 
             ## 使用
 

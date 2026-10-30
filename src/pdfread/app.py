@@ -48,12 +48,14 @@ def _open_window(url: str) -> None:
     if sys.platform == "darwin":
         for app_name in ("Google Chrome", "Microsoft Edge"):
             try:
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     ["open", "-na", app_name, "--args", f"--app={url}"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                return
+                # Popen 成功不代表浏览器存在: open 找不到目标 App 时非零退出
+                if proc.wait(timeout=5) == 0:
+                    return
             except Exception:
                 continue
     else:

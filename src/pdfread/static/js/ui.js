@@ -117,7 +117,8 @@ async function openFile(path) {
   const serial = ++fileSerial, previous = right.innerHTML;
   // 打开新文件前停掉当前翻译流并快照当前标签, 避免 busy 提示覆盖快照
   if (es) { es.close(); es = null; }
-  running = false;
+  if (esP) { esP.close(); esP = null; }
+  running = false; polishing = false;
   snapshotTab();
   closePicker();
   setBusyProg("正在解析 " + path.split(/[/\\]/).pop() + " …", null);
@@ -139,7 +140,8 @@ function uploadFile(file) {
   if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }
-  running = false;
+  if (esP) { esP.close(); esP = null; }
+  running = false; polishing = false;
   snapshotTab();
   closePicker();
 
@@ -235,7 +237,8 @@ async function openUrl() {
   if (!url) return;
   const serial = ++fileSerial, previous = right.innerHTML;
   if (es) { es.close(); es = null; }
-  running = false;
+  if (esP) { esP.close(); esP = null; }
+  running = false; polishing = false;
   snapshotTab();
   closePicker();
 

@@ -140,7 +140,9 @@ async function closeTab(id) {
 function addOrActivateTab(data) {
   if (document.body.classList.contains("lib")) loadLibrary();  // 侧栏打开时即时反映新入库
   if (es) { es.close(); es = null; }
+  if (esP) { esP.close(); esP = null; }
   running = false;
+  polishing = false;
   $("#btnRun").textContent = "开始翻译";
   let t = tabs.find((x) => x.id === data.doc);
   if (t) {

@@ -35,17 +35,24 @@ function attachLeftObserver() {
       const el = e.target;
       const p = +el.dataset.p;
       if (epub) {
-        if (el.dataset.done) return;
-        el.dataset.done = "1";
-        io.unobserve(el);
+        // done 只在成功后设置: 请求中途切标签时快照里的占位符没有 done,
+        // 恢复后 observer 会重新拉取, 不再卡在"章节加载中"
+        if (el.dataset.done || el.dataset.loading) return;
+        el.dataset.loading = "1";
         fetch(`/api/chapter/${p}?doc=${documentId}`)
           .then((r) => r.ok ? r.text() : Promise.reject(r.status))
           .then((html) => {
             // 图片占位前缀替换为包内资源端点
             el.innerHTML = html.replaceAll("__EPUB_RES__",
               `/api/epub-res/${p}?doc=${documentId}&path=`);
+            el.dataset.done = "1";
+            delete el.dataset.loading;
+            io.unobserve(el);
           })
-          .catch(() => { el.innerHTML = `<span class="loading">章节加载失败</span>`; });
+          .catch(() => {
+            delete el.dataset.loading;   // 失败允许重试
+            el.innerHTML = `<span class="loading">章节加载失败，滚动重试</span>`;
+          });
         return;
       }
       if (el.src) return;   // SVG 与缩放无关, 加载一次即可

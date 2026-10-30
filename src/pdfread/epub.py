@@ -78,6 +78,8 @@ def _read_ncx(zf: zipfile.ZipFile, manifest: dict, media: dict,
     out = []
 
     def walk(node, depth):
+        if depth > 32:   # 防御异常嵌套的目录, 防递归过深拖垮整本解析
+            return
         for np in node.findall("ncx:navPoint", _NCX_NS):
             label = np.find("ncx:navLabel/ncx:text", _NCX_NS)
             content = np.find("ncx:content", _NCX_NS)
@@ -141,10 +143,12 @@ def _sanitize(soup, base: str) -> str:
                               "audio", "video"]):
         tag.decompose()
     for tag in soup.find_all(True):
-        # 事件属性、内联样式、id 清除
+        # 事件属性、内联样式、id、data-* 清除:
+        # style 可含 url() 外发请求; id 防撞应用 #left 等查询;
+        # data-* 防撞应用 data-hid 等钩子被书籍内容冒冲(如假高亮)
         for attr in list(tag.attrs):
             la = attr.lower()
-            if la.startswith("on") or la in ("style", "id"):
+            if la.startswith("on") or la in ("style", "id") or la.startswith("data-"):
                 del tag[attr]
         for attr in ("href", "src"):
             val = tag.get(attr)
@@ -160,7 +164,9 @@ def _sanitize(soup, base: str) -> str:
                 if srcset:
                     src = srcset.split(",")[0].strip().split(" ")[0]
                     tag["src"] = src
-                    del tag["srcset"]
+            # srcset 浏览器优先于 src, 处理完必须删除, 否则外链图片绕过拦截
+            if "srcset" in tag.attrs:
+                del tag["srcset"]
             if not src:
                 tag.decompose()
             elif re.match(r"(?i)\s*https?://", src):

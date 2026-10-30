@@ -96,8 +96,11 @@ async function openLibDoc(id) {
   running = false; polishing = false;
   $("#btnRun").textContent = "开始翻译";
   snapshotTab();
-  // 已打开的文档后端直接激活(不重新解析), 300ms 内完成则不显示 busy
-  const busyTimer = setTimeout(() => setBusyProg("正在打开文档 …", null), 300);
+  // 已打开的文档后端直接激活(不重新解析), 300ms 内完成则不显示 busy。
+  // 注意用浮动卡片而不是写右栏: 右栏是共享画布, 切标签时会被快照存档
+  const busyTimer = setTimeout(() =>
+    showBusyOverlay(`<div class="busywrap"><div class="busymsg">正在打开文档 …</div>`
+      + `<div class="busybar"><div class="indet"></div></div></div>`, false), 300);
   try {
     const r = await libPost("/api/library/open", { id });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
