@@ -1256,6 +1256,45 @@ async def update_download() -> dict:
             "version": data.get("latest", "")}
 
 
+# ---------- 页面心跳 / 关页退出看门狗 ----------
+# 桌面版回退到浏览器模式时, 用户关掉页面后服务没有退出通道, 进程会残留。
+# 页面每 5s 发一次心跳; pagehide(关页/刷新)时启动 8s 退出倒计时,
+# 期间任何页面(含刷新后的新页面、其他标签页)心跳到达则取消。
+
+_HEARTBEAT = {"last": 0.0, "kill_at": 0.0, "enabled": False}
+
+
+@app.post("/api/heartbeat")
+def heartbeat() -> dict:
+    _HEARTBEAT["last"] = time.time()
+    _HEARTBEAT["kill_at"] = 0.0    # 有心跳则取消关页倒计时
+    return {"ok": True}
+
+
+@app.post("/api/pagehide")
+def pagehide() -> dict:
+    if _HEARTBEAT["enabled"]:
+        _HEARTBEAT["kill_at"] = time.time() + 8
+    return {"ok": True}
+
+
+def enable_page_watchdog() -> None:
+    """开启关页看门狗(仅桌面版浏览器回退模式调用)。"""
+    if _HEARTBEAT["enabled"]:
+        return
+    _HEARTBEAT["enabled"] = True
+
+    def loop() -> None:
+        while True:
+            time.sleep(2)
+            kill_at = _HEARTBEAT["kill_at"]
+            if kill_at and time.time() >= kill_at:
+                _close_pool()
+                os._exit(0)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 @app.post("/api/shutdown")
 async def shutdown() -> dict:
     """退出应用。

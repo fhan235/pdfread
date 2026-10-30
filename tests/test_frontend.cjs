@@ -27,6 +27,7 @@ function setup() {
     sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
     localStorage: { getItem() { return null; }, setItem() {} },
     setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
+    setInterval() {}, clearInterval() {},
     fetch: async () => ({ ok: false, json: async () => ({ detail: 'Invalid PDF' }) }),
     EventSource: function(url) { this.url = url; this.addEventListener = () => {}; },
     FormData: class { append() {} },

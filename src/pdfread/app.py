@@ -262,11 +262,17 @@ def main() -> None:
             time.sleep(0.05)
 
         if _run_native_window(url):
-            # 原生窗口被用户关闭 -> 停服务退出, 生命周期一致
+            # 原生窗口被用户关闭 -> 停服务退出, 生命周期一致。
+            # 给 3 秒优雅退出, 随后强制回收进程池并立即退出,
+            # 不让卡住的 worker / atexit 等待把进程拖成残留。
             srv.should_exit = True
-            return
+            srv_thread.join(timeout=3)
+            server._close_pool()
+            os._exit(0)
 
-        # 回退: 浏览器应用模式, 主线程挂住等服务
+        # 回退: 浏览器应用模式, 主线程挂住等服务。
+        # 浏览器关页 ≠ 退出应用, 开启心跳看门狗: 页面全部关闭后自动退出。
+        server.enable_page_watchdog()
         threading.Timer(0.5, lambda: _open_window(url)).start()
         srv_thread.join()
 

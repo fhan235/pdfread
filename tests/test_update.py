@@ -65,3 +65,21 @@ async def test_fallback_latest_bad_location(monkeypatch):
         async def get(self, url, **kw):
             return _FakeResp("https://github.com/login")
     assert await server._fallback_latest(Bad()) is None
+
+
+def test_pagehide_watchdog_arm_and_cancel(client):
+    hb = server._HEARTBEAT
+    saved = dict(hb)
+    try:
+        # 未开启看门狗时 pagehide 不武装倒计时
+        hb.update(last=0.0, kill_at=0.0, enabled=False)
+        assert client.post("/api/pagehide").status_code == 200
+        assert hb["kill_at"] == 0.0
+        # 开启后 pagehide 武装, 心跳取消
+        hb["enabled"] = True
+        client.post("/api/pagehide")
+        assert hb["kill_at"] > 0
+        client.post("/api/heartbeat")
+        assert hb["kill_at"] == 0.0 and hb["last"] > 0
+    finally:
+        hb.update(saved)
