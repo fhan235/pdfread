@@ -28,7 +28,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 | `server.py` | 全部 HTTP 路由 + 运行时 STATE | 路由见下表；`configure()`；`_register()` 打开文档登记（含文库 upsert、打开历史）；`_qa_cfg()` 问答模型覆盖；`_close_pool()` 退出时强制回收进程池；`enable_page_watchdog()` 关页退出看门狗 |
 | `extract.py` | PDF 文本提取 + 段落重建（行级聚类、分栏） | `Para` 数据类；`extract_pages()` |
 | `paper.py` | 论文模式：图表区域识别（figtext）、跨图表段落续接、公式占位（⟦F1⟧）、表格/参考文献过滤 | `looks_like_paper()` / `extract_paper()`；`mask_formulas()` / `unmask_formulas()` |
-| `pdfworker.py` | 进程池内执行：解析（带 stamp 防文件中途变更）、渲染 PNG/SVG、词坐标 | `inspect_pdf` / `render_page_svg` / `page_words` |
+| `pdfworker.py` | 进程池内执行：解析（带 stamp 防文件中途变更）、渲染 PNG/SVG、词坐标、文内链接 | `inspect_pdf` / `render_page_svg` / `page_words` / `page_links` |
 | `translate.py` | LLM 调用：翻译/润色/问答/摘要 + SQLite 缓存 | `PROVIDERS`（含 `models` 候选列表）；`Translator`（`_chat` 是统一调用点，429/5xx 重试 3 次） |
 | `library.py` | 文库 + 高亮的 SQLite 持久化 | `Library`；表结构在 `_SCHEMA`；`VALID_COLORS` |
 | `settings.py` | 本地配置（API Key 0600、解析选项、打开历史、更新代理、按服务的 model/base_url/qa_model） | `profile()` / `update_translation()` / `get_parse()` / `add_history()` / `set_proxy()` |
@@ -46,7 +46,8 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/{n}`(包内图片, SVG 加 CSP sandbox) L796
 文档管理：`GET /api/docs` L273 · `POST /api/docs/close` L286 · `GET /api/info` L299 · `POST /api/open` L573 · `POST /api/upload` L645 · `POST /api/open-url` L598 · `GET /api/browse` L362 · `POST /api/roots`(加白名单) L348 · `GET /api/progress`(打开任务进度轮询) L593 · `GET /api/history` L401 · `POST /api/history/remove` L409
 文库：`GET /api/library` L425 · folders L430-451 · documents move/tags/remove L454-481 · `POST /api/library/open` L495 · `POST /api/library/progress` L484
-划线：`GET /api/words/{n}` L526 · `GET/POST /api/highlights` L544/L552 · `POST /api/highlights/delete` L567
+划线：`GET /api/words/{n}` L527 · `GET/POST /api/highlights` · `POST /api/highlights/delete`
+文内链接：`GET /api/links/{n}`(本页指向文档内其他位置的链接, 仅 PDF) L545
 设置：`GET/POST /api/settings`（model/qa_model/base_url/proxy 覆盖，models 候选列表）L684/L714 · `GET/POST /api/parse-settings`（论文模式选项）L761/L768
 版本更新：`GET /api/update/check`(含 `apply_block` 不可一键安装的原因) L1381 · `POST /api/update/download`(下载 + SHA-256 校验) L1482 · `POST /api/update/apply`(用户确认后: 暂存并启动安装器, 随后本进程退出) L1491
 生命周期：`POST /api/heartbeat` L1539 · `POST /api/pagehide`(关页启动 8s 退出倒计时) L1546 · `POST /api/shutdown`（`_schedule_exit()`：强制回收进程池后 `os._exit`，不让卡住的 worker 拖住退出）L1596
@@ -66,7 +67,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 
 ## 前端地图（static/，无构建，多文件）
 
-`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 8 个**经典脚本**，
+`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 9 个**经典脚本**，
 加载顺序即依赖顺序（`index.html` 底部的 script 标签顺序）。
 跨文件共享全局作用域：顶层 `function` 声明挂在 window 上，`const/let` 在全局词法环境，
 后续文件可直接引用先加载文件的符号。改动时注意：
@@ -82,6 +83,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/pages.js` | 左栏懒加载（SVG/章节）、翻译 SSE、润色、滚动同步、目录、阅读进度 | `buildLeft()`（imgwrap+hlayer / echapter）；`run()`/`renderPage()`；`togglePolish()`；`tidy`/`esc`；`centerLeft()`；`scrollToPage()`；`renderTOC()` |
 | `js/library.js` | 文库侧栏（文件夹/标签/搜索/移动/移除） | `LIB`/`libScope`；`renderLibrary()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
+| `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
 | `js/panels.js` | 分割条拖拽 + AI 问答（流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaHist`/`mdRender()`（先转义）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
 | `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
@@ -95,6 +97,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **EPUB/TXT 渲染**：左栏按章节请求 `/api/chapter/{n}` 的净化 HTML；EPUB 图片经 `/api/epub-res` 提供（前端把 `__EPUB_RES__` 占位前缀替换为真实端点）。
 - **划线坐标**：以 PDF 点存入 SQLite，前端按 `INFO.sizes` 换算成 % 定位 → 缩放/换 DPI 不错位。EPUB/TXT 不支持划线。
 - **划词吸附**：`page_words()` 给词坐标（按 块→行→词 排序，双栏不交错），前端拖选按词吸附，按 (块,行) 合并成每行矩形；双击单词直接选中；起点落在空白处拖到第一个词才确立，不作废手势。
+- **文内链接**：`page_links()` 只取 `LINK_GOTO` / `LINK_NAMED`（外链、跨文件链接忽略），统一换算成**显示坐标**。两类目标点坐标系不同（已实测）：显式目标 MuPDF 已换算好；命名目标（LaTeX hyperref 的引用都是这种）来自 `resolve_names()`，仍是 PDF 原始坐标，需 `× transformation_matrix × rotation_matrix`。每条链接返回 `[x0,y0,x1,y1, 目标页, 锚点y, 滚动y]`：锚点用于高亮，滚动 y 通常等于锚点。**图片例外**（`_figure_view`）：hyperref / Word 交叉引用把图片锚点放在图注上，而图注多在图的下方，直接滚过去图会在视野外；因此当锚点左侧 90pt 内有「Figure/Fig./图 + 编号」标签（hyperref 锚点在标签之后，Word 在标签起点；按词匹配，因为粗体标签常被 PyMuPDF 切成单独的行），且图注正上方 40pt 内有图形（`get_image_info()` 位图 + `get_cdrawings()` 矢量，宽或高 <8pt 的细线不算，避免吞进表格横线）时，滚到图形顶部；向上吸附子图时，中间夹着别的图/表注就停。图注宽度从标签沿行向右延伸，遇到另一个图注标签（双栏并排的图）或 >40pt 间隔就停。表格不调整（表注在表上方）；旋转页不调整；参考文献链接（`cite.*`）跳过分析。前端在 `.imgwrap` 里叠 `.llayer`（图层不接收事件，只有 `.plink` 热区可点，其余位置照常拖选划线）；按下后移动超过 4px 视为拖选，不触发跳转。返回位置记为（页码, 页内比例），中途缩放也能准确回位；`buildLeft()` 时清空该文档的栈。
 - **模型配置**：预设 + 按服务 profile 覆盖（model/base_url/qa_model）；问答/速读走 `_qa_cfg()`，qa_model 为空时跟随翻译模型。
 - **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
@@ -128,7 +131,7 @@ node --test tests/test_frontend.cjs                 # 前端（需 Node 22+）
 ```
 
 - `tests/conftest.py`：`client` fixture（TestClient + 临时目录）、`make_pdf` 合成 PDF
-- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
+- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
 - 测试不调付费 API：monkeypatch `Translator._chat`（问答/润色）或 `Translator.translate`（翻译）
 - 前端 cjs 测试按 `JS_FILES` 顺序拼接 `static/js/*.js` 后用 vm 跑（截到 `/* 启动:` 之前），新增 js 文件要同步加入该列表，改 DOM 结构或启动逻辑时注意兼容
 

@@ -37,7 +37,8 @@ from fastapi.responses import (
 )
 
 from .library import Library
-from .pdfworker import inspect_pdf, page_words, render_page, render_page_svg
+from .pdfworker import (inspect_pdf, page_links, page_words, render_page,
+                        render_page_svg)
 from .paths import cache_dir, config_dir, static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
@@ -539,6 +540,24 @@ async def words(num: int, doc: str = "") -> dict:
         await _restart_executor()
         raise HTTPException(409, "PDF 已变更或无法读取，请重新打开") from None
     return {"page": num, "words": result}
+
+
+@app.get("/api/links/{num}")
+async def links(num: int, doc: str = "") -> dict:
+    """一页内的文内跳转链接(引用/交叉引用), 供左栏点击跳转(仅 PDF)。"""
+    current = _document(doc)
+    if current.get("fmt", "pdf") != "pdf":
+        raise HTTPException(400, "该格式没有页面链接")
+    if not (1 <= num <= len(current["pages"])):
+        raise HTTPException(404, "页码超出范围")
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            _executor(), page_links, str(current["path"]), num,
+            current["stamp"])
+    except Exception:
+        await _restart_executor()
+        raise HTTPException(409, "PDF 已变更或无法读取，请重新打开") from None
+    return {"page": num, "links": result}
 
 
 @app.get("/api/highlights")

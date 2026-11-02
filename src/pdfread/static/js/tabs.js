@@ -88,6 +88,7 @@ function restoreTab(t) {
   $("#pEnd").value = t.pEnd ?? 0;
   suppress.left = suppress.right = 0;
   lastTop.left = lastTop.right = 0;
+  syncLinkBack();   // 返回栈按文档保存, 切到哪个标签显示哪个的
 }
 
 function switchTab(id) {
@@ -127,6 +128,7 @@ async function closeTab(id) {
       INFO = null;
       sessionStorage.removeItem("pdfread.doc");
       syncEreadBtn();
+      syncLinkBack();
       $("#docTitle").textContent = "未加载 PDF";
       $("#docMeta").textContent = "点击「打开」选择文件，或直接拖入 PDF";
       left.innerHTML = "";

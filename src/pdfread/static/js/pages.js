@@ -5,6 +5,7 @@
 function buildLeft() {
   left.innerHTML = "";
   if (INFO.doc) delete wordsByDoc[INFO.doc];  // 重新解析后词坐标可能变化, 强制重取
+  resetLinkNav(INFO.doc);   // 页面重建, 旧的返回位置作废
   const epub = INFO.fmt !== "pdf";   // EPUB/TXT 均走章节渲染
   for (let i = 1; i <= INFO.pages; i++) {
     const [w, h] = INFO.sizes[i - 1] || [612, 792];
@@ -15,7 +16,8 @@ function buildLeft() {
       + (epub
         ? `<div class="echapter" data-p="${i}"><span class="loading">章节加载中…</span></div>`
         : `<div class="imgwrap"><img data-p="${i}" style="aspect-ratio:${w}/${h}"`
-          + ` alt="第 ${i} 页" draggable="false" /><div class="hlayer"></div></div>`);
+          + ` alt="第 ${i} 页" draggable="false" /><div class="hlayer"></div>`
+          + `<div class="llayer"></div></div>`);
     left.appendChild(d);
   }
   attachLeftObserver();
@@ -55,8 +57,10 @@ function attachLeftObserver() {
           });
         return;
       }
-      if (el.src) return;   // SVG 与缩放无关, 加载一次即可
-      el.src = `/api/page/${p}.svg?doc=${documentId}`;
+      if (!el.src) el.src = `/api/page/${p}.svg?doc=${documentId}`;   // SVG 与缩放无关, 加载一次即可
+      // 链接层单独标记完成: 请求中途切标签时快照里没有 done, 恢复后重新拉取
+      const ll = el.parentElement && el.parentElement.querySelector(".llayer");
+      if (ll && !ll.dataset.done) { loadLinks(p, documentId); return; }
       io.unobserve(el);
     });
   }, { rootMargin: "700px" });

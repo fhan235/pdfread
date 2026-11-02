@@ -549,6 +549,20 @@
            box-shadow: 0 8px 24px #00000080; }
   #hlPop button, #hlConfirm button { font-size: 12px; padding: 4px 12px; }
   #hlConfirm { gap: 6px; }
+  /* ---------- 文内链接(引用跳转) ---------- */
+  /* 叠在划线层之上; 图层本身不接收事件, 只有热区可点, 其余位置照常拖选划线 */
+  .llayer { position: absolute; inset: 0; pointer-events: none; }
+  .plink { position: absolute; pointer-events: auto; cursor: pointer;
+           border-radius: 2px; }
+  .plink:hover { background: #4f8cff2e; box-shadow: 0 0 0 1px #4f8cff80; }
+  .ltarget { position: absolute; left: 0; right: 0; height: 2.6%;
+             margin-top: -.6%; background: #4f8cff40; pointer-events: none;
+             border-left: 3px solid var(--accent);
+             animation: ltarget 1.8s ease-out forwards; }
+  @keyframes ltarget { 0%, 45% { opacity: 1; } 100% { opacity: 0; } }
+  #linkBack { display: none; position: fixed; z-index: 60;
+              font-size: 12.5px; padding: 6px 14px; border-radius: 16px;
+              box-shadow: 0 6px 18px #00000066; }
   /* 划词翻译气泡 */
   #trPop { display: none; position: fixed; z-index: 70; max-width: 360px;
            background: var(--panel); border: 1px solid var(--line);
