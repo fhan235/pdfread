@@ -67,7 +67,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 
 ## 前端地图（static/，无构建，多文件）
 
-`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 9 个**经典脚本**，
+`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 10 个**经典脚本**，
 加载顺序即依赖顺序（`index.html` 底部的 script 标签顺序）。
 跨文件共享全局作用域：顶层 `function` 声明挂在 window 上，`const/let` 在全局词法环境，
 后续文件可直接引用先加载文件的符号。改动时注意：
@@ -84,7 +84,8 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/library.js` | 文库侧栏（文件夹/标签/搜索/移动/移除） | `LIB`/`libScope`；`renderLibrary()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
 | `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
-| `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（先转义；支持表格/代码块/引用/分割线，容忍行间空行与未闭合代码块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
+| `js/mathtex.js` | 数学公式渲染：自写 TeX 子集 → HTML（无外部依赖，离线可用） | `texRender(src, display)`；`TEX_SYM`/`TEX_BIG`/`TEX_FONT`/`TEX_ACC`/`TEX_ENV` 查表；不认识的命令排成正体并标 `.munk`，解析异常退回转义原文 |
+| `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（先转义；表格/代码块/引用/分割线/公式，容忍行间空行与未闭合块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
 | `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
 
@@ -99,10 +100,11 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **划词吸附**：`page_words()` 给词坐标（按 块→行→词 排序，双栏不交错），前端拖选按词吸附，按 (块,行) 合并成每行矩形；双击单词直接选中；起点落在空白处拖到第一个词才确立，不作废手势。
 - **文内链接**：`page_links()` 只取 `LINK_GOTO` / `LINK_NAMED`（外链、跨文件链接忽略），统一换算成**显示坐标**。两类目标点坐标系不同（已实测）：显式目标 MuPDF 已换算好；命名目标（LaTeX hyperref 的引用都是这种）来自 `resolve_names()`，仍是 PDF 原始坐标，需 `× transformation_matrix × rotation_matrix`。每条链接返回 `[x0,y0,x1,y1, 目标页, 锚点y, 滚动y]`：锚点用于高亮，滚动 y 通常等于锚点。**图片例外**（`_figure_view`）：hyperref / Word 交叉引用把图片锚点放在图注上，而图注多在图的下方，直接滚过去图会在视野外；因此当锚点左侧 90pt 内有「Figure/Fig./图 + 编号」标签（hyperref 锚点在标签之后，Word 在标签起点；按词匹配，因为粗体标签常被 PyMuPDF 切成单独的行），且图注正上方 40pt 内有图形（`get_image_info()` 位图 + `get_cdrawings()` 矢量，宽或高 <8pt 的细线不算，避免吞进表格横线）时，滚到图形顶部；向上吸附子图时，中间夹着别的图/表注就停。图注宽度从标签沿行向右延伸，遇到另一个图注标签（双栏并排的图）或 >40pt 间隔就停。表格不调整（表注在表上方）；旋转页不调整；参考文献链接（`cite.*`）跳过分析。前端在 `.imgwrap` 里叠 `.llayer`（图层不接收事件，只有 `.plink` 热区可点，其余位置照常拖选划线）；按下后移动超过 4px 视为拖选，不触发跳转。返回位置记为（页码, 页内比例），中途缩放也能准确回位；`buildLeft()` 时清空该文档的栈。
 - **模型配置**：预设 + 按服务 profile 覆盖（model/base_url/qa_model）；问答/速读走 `_qa_cfg()`，qa_model 为空时跟随翻译模型。
-- **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。
+- **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。默认主题是浅色（`prefs.theme="light"`，`index.html` 的 `<body class="light">` 避免首屏闪深色）。
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
 - **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, 模型) 缓存。
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
+- **公式渲染**：`mathtex.js` 自写 TeX 子集渲染（本机离线应用，不引 CDN/字体）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。
@@ -117,6 +119,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 加翻译服务 | `translate.py` `PROVIDERS` 加一行（`models` 是界面下拉的候选列表） |
 | 改翻译/润色/问答/摘要行为 | 对应 PROMPT（translate.py L61/72/84/93）——改后建议 bump `cache_model`/`polish_model` 里的版本串 |
 | 加主题 | `style.css` 加变量块（仿 `body.theme-paper`）+ `prefs.js` 的 `THEME_ORDER/NAMES` + index.html 的 segTheme 按钮 |
+| 补公式语法 | `js/mathtex.js` 的查表（`TEX_SYM`/`TEX_BIG`/`TEX_FONT`/`TEX_ACC`/`TEX_ENV`）+ `style.css`「数学公式」区块；界面上标黄的就是没认出来的命令 |
 | 加划线颜色 | `library.py` `VALID_COLORS` + `style.css` `.hl` 样式 + index.html `#hlConfirm`/`#hlPop` 加按钮 |
 | 加 API | `server.py` 路由区 + `library.py` 方法 + 前端对应 js 文件用 `libPost` 调用 |
 | 改文库 UI | `style.css`「文库侧栏」区块 + `js/library.js` |

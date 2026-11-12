@@ -1,6 +1,6 @@
 /* ---------------- 阅读偏好(存 localStorage) ---------------- */
 const PREF_KEY = "pdfread.prefs";
-let prefs = { theme: "dark", font: "15", layout: "side", layoutPrev: "side",
+let prefs = { theme: "light", font: "15", layout: "side", layoutPrev: "side",
               expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340, qaInH: 56,
               toc: false, efont: 16, eline: 1.9, efontFam: "serif",

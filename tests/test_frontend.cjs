@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 // 前端按功能拆成多个经典脚本, 共享全局作用域, 加载顺序即依赖顺序
-const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'links', 'panels', 'ui', 'prefs'];
+const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'links', 'mathtex', 'panels', 'ui', 'prefs'];
 const script = JS_FILES
   .map((f) => fs.readFileSync(`src/pdfread/static/js/${f}.js`, 'utf8'))
   .join('\n')
@@ -97,6 +97,48 @@ test('qa sessions keep their histories separate', () => {
   run('document.querySelector("#qaDel").onclick()');
   assert.equal(run('qaSessions.length'), 1);
   assert.equal(run('qaHist[0].content'), '第二个问题');
+});
+
+test('math renders inline and as display blocks', () => {
+  const { run } = setup();
+  const md = '顶点 $v$ 的能量\n\n$$\n\n\\min_{v\\in\\text{voxel}} e(v)=\\sum_i d^2_{\\Pi,i}+\\lambda_{\\text{reg}}\\,d^2_{\\bar q}\n\n$$\n\n收尾';
+  const html = run(`mdRender(${JSON.stringify(md)})`);
+  assert.match(html, /<div class="md-math">/);      // $$ 单独成行也认
+  assert.match(html, /∑/);
+  assert.match(html, /λ/);
+  assert.match(html, /mlim/);                       // 公式块里 \sum 的限标上下排
+  assert.match(html, /class="mover"><i>q<\/i>/);    // \bar q 的上划线盖在 q 上, 不是空格
+  assert.match(html, /mss/);                        // d^2_{\Pi,i} 上下标堆叠
+  assert.doesNotMatch(html, /\\sum|\\lambda|\\text/); // 不残留裸 TeX
+  assert.match(html, /<p>收尾<\/p>/);
+});
+
+test('math does not break table cells and spares currency', () => {
+  const { run } = setup();
+  const md = '| 符号 | 含义 |\n|---|---|\n| $\\lVert v\\rVert^2$ | 范数 |';
+  const html = run(`mdRender(${JSON.stringify(md)})`);
+  assert.equal((html.match(/<td/g) || []).length, 2);   // 公式里的内容没把单元格切坏
+  assert.match(html, /‖/);
+  // 金额不是公式: 不能被当成行内数学吃掉
+  assert.match(run('mdRender("价格 $5 和 $10 之间")'), /<p>价格 \$5 和 \$10 之间<\/p>/);
+  // 行内代码里的 $ 保持原样
+  assert.match(run('mdRender("`$x^2$`")'), /<code>\$x\^2\$<\/code>/);
+});
+
+test('math renderer escapes html in every position', () => {
+  const { run } = setup();
+  const cases = ['$<script>alert(1)</script>$', '$\\text{<img src=x onerror=alert(1)>}$',
+    '$x^{"><script>alert(1)</script>}$', '$\\begin{array}{"><script>bad</script>} a \\end{array}$'];
+  const ok = new Set(['p', 'b', 'i', 'sub', 'sup', 'br', 'code', 'div', 'span']);
+  for (const src of cases) {
+    const html = run(`mdRender(${JSON.stringify(src)})`);
+    for (const [, name, attr] of html.matchAll(/<\/?([a-zA-Z0-9]+)((?:\s+[a-zA-Z-]+="[^"<>]*")*)\s*>/g)) {
+      assert.ok(ok.has(name.toLowerCase()), `意外标签 ${name}`);
+      assert.doesNotMatch(attr, /\son[a-z]+=/i);
+    }
+    const text = html.replace(/<\/?[a-zA-Z0-9]+(?:\s+[a-zA-Z-]+="[^"<>]*")*\s*>/g, '');
+    assert.ok(!text.includes('<') && !text.includes('>'), `残留未转义尖括号: ${text}`);
+  }
 });
 
 test('export excludes failed paragraphs and labels partial output', () => {

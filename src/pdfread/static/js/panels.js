@@ -127,20 +127,31 @@ function toggleQA() {
 
 /* 极简 Markdown 渲染(所有文本先 esc 转义再拼标签, 防注入):
    支持 # 标题、**粗体**、*斜体*、`行内代码`、无序/有序列表、
-   ``` 代码块、| 表格 |、> 引用、--- 分割线。
-   容错: 表格行/列表项之间夹空行不断开(模型常这样输出); 代码块未闭合(流式中)渲染到末尾 */
+   ``` 代码块、| 表格 |、> 引用、--- 分割线、
+   数学公式($...$ / \(...\) 行内, $$...$$ / \[...\] 独立成块, 见 mathtex.js)。
+   容错: 表格行/列表项之间夹空行不断开(模型常这样输出); 代码块与公式块未闭合(流式中)渲染到末尾 */
 const MD_UL = /^\s*[-*+•]\s+(.*)/;
 const MD_OL = /^\s*(\d+)[.、)]\s+(.*)/;
 const MD_HR = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const MD_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+/* 行内代码与行内公式: 整体切出, 内部不参与 Markdown 变换。
+   行内公式要求 $ 紧邻非空白, 避免把「$5 … $10」这类金额当成公式 */
+const MD_SPAN = /(`[^`]+`|\$\$[\s\S]+?\$\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$(?!\s)(?:\\.|[^\n$\\])+?(?<![\s\\])\$)/;
+const MD_SPAN_G = new RegExp(MD_SPAN.source, "g");
 
 function mdRender(src) {
-  // 行内代码先切出来, 其内容不再做粗斜体变换
-  const inline = (s) => s.split(/(`[^`]+`)/).map((seg, k) => (k % 2
-    ? `<code>${esc(seg.slice(1, -1))}</code>`
-    : esc(seg)
-      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-      .replace(/\*([^*]+)\*/g, "<i>$1</i>"))).join("");
+  const inline = (s) => s.split(MD_SPAN).map((seg, k) => {
+    if (k % 2 === 0) {
+      return esc(seg)
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/\*([^*]+)\*/g, "<i>$1</i>");
+    }
+    if (seg[0] === "`") return `<code>${esc(seg.slice(1, -1))}</code>`;
+    if (seg.startsWith("$$")) return texRender(seg.slice(2, -2), true);
+    if (seg.startsWith("\\[")) return texRender(seg.slice(2, -2), true);
+    if (seg.startsWith("\\(")) return texRender(seg.slice(2, -2), false);
+    return texRender(seg.slice(1, -1), false);
+  }).join("");
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   const nextNonBlank = (k) => {
     while (k < lines.length && !lines[k].trim()) k++;
@@ -149,10 +160,13 @@ function mdRender(src) {
   const listType = (l) => (MD_OL.test(l) ? "ol" : MD_UL.test(l) && !MD_HR.test(l) ? "ul" : null);
   const isSep = (l) => l.includes("|") && MD_SEP.test(l);
   const cells = (l) => {
-    let s = l.trim();
+    // 先把行内代码/公式整段换成占位符, 防止其中的 | 把单元格切坏
+    const kept = [];
+    let s = l.trim().replace(MD_SPAN_G, (mm) => `\u0000${kept.push(mm) - 1}\u0000`);
     if (s.startsWith("|")) s = s.slice(1);
     if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
-    return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+    return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|")
+      .replace(/\u0000(\d+)\u0000/g, (_, n) => kept[+n]));
   };
   const out = [];
   let list = null;
@@ -177,6 +191,27 @@ function mdRender(src) {
         body.push(lines[i]);
       }
       out.push(`<pre class="md-pre"><code>${esc(body.join("\n"))}</code></pre>`);
+      continue;
+    }
+    // 独立公式块: $$ … $$ / \[ … \], 允许跨行(模型常把 $$ 单独放一行)
+    if ((m = line.match(/^\s*(\$\$|\\\[)/))) {
+      closeList();
+      const open = m[1], close = open === "$$" ? "$$" : "\\]";
+      const rest = line.trim().slice(open.length);
+      const e0 = rest.indexOf(close);
+      let body = rest;
+      if (e0 >= 0) {
+        body = rest.slice(0, e0);
+      } else {
+        const acc = [rest];
+        for (i++; i < lines.length; i++) {
+          const e = lines[i].indexOf(close);
+          if (e >= 0) { acc.push(lines[i].slice(0, e)); break; }
+          acc.push(lines[i]);
+        }
+        body = acc.join("\n");
+      }
+      out.push(`<div class="md-math">${texRender(body, true)}</div>`);
       continue;
     }
     if (line.includes("|")) {

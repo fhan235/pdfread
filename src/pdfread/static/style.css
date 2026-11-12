@@ -547,6 +547,63 @@
   .qmsg blockquote { margin: 4px 0 8px; padding: 2px 10px;
                      border-left: 3px solid var(--accent); color: var(--dim); }
   .qmsg hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
+
+  /* ---------- 数学公式(mathtex.js 自渲染, 无外部依赖) ---------- */
+  .mathi, .mathd {
+    font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math",
+                 Cambria, Georgia, "Times New Roman", serif;
+    font-size: 1.06em; white-space: nowrap;
+  }
+  .mathi { display: inline-block; vertical-align: baseline; }
+  .mathd { display: inline-block; font-size: 1.14em; }
+  .md-math { margin: 10px 0; text-align: center;
+             overflow-x: auto; overflow-y: hidden; }
+  .mathraw { font-family: ui-monospace, Menlo, Consolas, monospace;
+             font-size: .92em; color: var(--warn); white-space: pre-wrap; }
+  .mathi i, .mathd i { font-style: italic; }
+  .mbin { margin: 0 .22em; }
+  .mop { font-size: 1.05em; }
+  .mdel { font-size: 1.15em; }
+  .mtxt, .msf, .mtt, .mbf, .mit, .mbb, .mcal { font-style: normal; }
+  .mtxt { font-family: inherit; }
+  .msf { font-family: -apple-system, "Segoe UI", sans-serif; }
+  .mtt { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .mbf { font-weight: 700; }
+  .mit { font-style: italic; }
+  .mbb, .mcal { font-weight: 600; letter-spacing: .02em; }
+  .munk { color: var(--warn); }   /* 不认识的命令, 便于回头补 */
+  /* 分式 */
+  .mfrac { display: inline-flex; flex-direction: column; text-align: center;
+           vertical-align: middle; font-size: .94em; margin: 0 .18em; }
+  .mfrac > .den { border-top: 1px solid currentColor; padding-top: .05em; }
+  .mfrac.nobar > .den { border-top: none; }
+  /* 根号 */
+  .msqrt { display: inline-flex; align-items: stretch; }
+  .msqrt > .mrad { font-size: 1.1em; }
+  .msqrt > .mrbody { border-top: 1px solid currentColor;
+                     padding: .08em .15em 0; }
+  .mroot { font-size: .7em; vertical-align: .55em; margin-right: -.35em; }
+  /* 同时有上下标: 竖排对齐 */
+  .mss { display: inline-flex; flex-direction: column; font-size: .72em;
+         line-height: 1.08; text-align: left; vertical-align: -.28em; }
+  .mss > .u { margin-bottom: .08em; }
+  /* 大算符的上下限(仅公式块) */
+  .mlim { display: inline-flex; flex-direction: column; align-items: center;
+          vertical-align: middle; margin: 0 .18em; }
+  .mlim > .mlimu, .mlim > .mlimd { font-size: .68em; line-height: 1.1; }
+  .mlim > .mlims { font-size: 1.3em; line-height: 1; }
+  /* 重音 */
+  .mover { border-top: 1px solid currentColor; padding-top: .04em; }
+  .munder { border-bottom: 1px solid currentColor; }
+  .macc { position: relative; display: inline-block; }
+  .macc > .mk { position: absolute; left: 0; right: 0; top: -.62em;
+                font-size: .8em; line-height: 1; text-align: center; }
+  /* matrix / cases / aligned 环境 */
+  .menvw { display: inline-flex; align-items: center; vertical-align: middle; }
+  .menvw > .mdel { font-size: 2.1em; font-weight: 300; }
+  .menv { display: inline-grid; gap: .15em .6em; vertical-align: middle;
+          justify-items: center; }
+  .menv > .mcell { white-space: nowrap; }
   .qmsg.user { background: #4f8cff26; margin-left: 28px; }
   .qmsg.bot { background: #ffffff0a; margin-right: 28px; }
   body.light .qmsg.bot { background: #00000007; }
