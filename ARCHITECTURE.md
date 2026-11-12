@@ -86,7 +86,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
 | `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
 | `js/mathtex.js` | 数学公式渲染：薄封装 KaTeX（本地自托管，离线可用） | `texRender(src, display)` 是唯一出口；`TEX_MACROS`（补 LLM 常用而 KaTeX 没有的命令）；`texNormalize()` 剥掉 `\begin{equation}`/`\label{}` 等 KaTeX 不认的文档级语法；KaTeX 本体在 `static/vendor/katex/` |
-| `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（先转义；表格/代码块/引用/分割线/公式，容忍行间空行与未闭合块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
+| `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（**先把公式/行内代码换占位符再做粗斜体**，所以 `**$x$：说明**` 这种跨公式的加粗能配对；表格/代码块/引用/分割线，容忍行间空行与未闭合块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
 | `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
 
@@ -107,7 +107,9 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **数学输出格式**：`QA_PROMPT` / `SUMMARY_PROMPT` 共用 `MATH_RULE`，**强制模型把数学一律写成 LaTeX**（行内 `$…$`、独立 `$$…$$`，变量与下标也要包）。没有这条时模型只给独立公式加 `$$`，行内符号写成裸文本（`d²_hat{q}`、`λ_bound`），既进不了 KaTeX，还会把 `hat{}` 这种命令名直接显示出来 —— 渲染器再好也救不了没被标记成公式的文本。规则里同时禁用 Unicode 上下标与 `\begin{equation}`/`\label{}`。
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
 - **公式渲染**：`mathtex.js` 封装 **KaTeX 0.16**（与 ChatGPT 同方案，排版基于 TeX 字体度量）。JS/CSS/woff2 字体全部自托管在 `static/vendor/katex/`，**不引任何 CDN**（本机应用，必须离线可用）；只有 woff2 会被实际请求（`@font-face` 里排第一）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。`throwOnError:false` 让流式中途的半截公式以警告色显示原文而不是整块消失；`strict:false` 允许公式里出现中文；`trust:false` 关掉 `\href`/`\html*`/`\includegraphics`；`maxExpand`/`maxSize` 限制宏展开与尺寸；`macros` 每次传副本，否则一条公式的 `\gdef` 会泄漏到后面的公式。MathML 里的 `<annotation>` 保留原始 LaTeX（可朗读、可复制回 TeX），所以断言「无裸 TeX」时要先剥掉它。
+- **Markdown 行内变换**：`mdRender` 的 `inline()` **先把公式/行内代码整段换成占位符，再做 `**粗体**`/`*斜体*`，最后还原**。不能反过来（先按公式切片再逐片套正则）—— 模型很爱写 `**$d^2_{\Pi,i}$：点到切平面的距离**`，切片后 `**` 的开闭落在公式两侧的不同片段里，永远配不上对，`**` 就被原样显示出来。强调标记要求紧邻非空白，避免把 `a * b` 的乘号当强调。
 - **主题与画布底色**：主题变量的覆盖（`body.light` / `body.theme-paper` / `body.theme-green` / 自定义）全挂在 **body** 上，而 CSS 变量只向下继承 —— `html`（即 `:root`）永远只能取到深色默认值。因此**背景只能画在 body 上，绝不能给 `html` 加 `background: var(--bg)`**：那样过滚动（macOS 橡皮筋）露出的画布会是近黑色，浅色主题下表现为「滚轮下拉整窗黑屏」。html 不画背景时，body 的背景按规范传播到画布，始终跟随主题。另配 `overscroll-behavior`（html/body 用 `none`、`.pane` 用 `contain`）从源头掐掉滚动链外溢。
+- **顶栏布局**：控件按用途包在 `header .grp` 里，**组内 `inline-flex` 不换行、换行以整组为单位**，组间用 `.grp + .grp::before` 画细竖线。窄窗口靠 `style.css` 末尾的媒体查询逐级让位（1520 缩字号滑块 → 1400 隐字号 → 1320 隐缩放 → 1100 隐同步与 label），把顶栏锁在单行 47px；让位的都是设置面板或快捷键另有入口的低频控件。**媒体查询必须放文件末尾**：同优先级下后出现的规则胜出，放前面会被后面的 `.fontctl`/`.zoomctl` 基础规则覆盖掉（踩过）。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。

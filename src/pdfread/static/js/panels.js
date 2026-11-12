@@ -140,18 +140,28 @@ const MD_SPAN = /(`[^`]+`|\$\$[\s\S]+?\$\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$(
 const MD_SPAN_G = new RegExp(MD_SPAN.source, "g");
 
 function mdRender(src) {
-  const inline = (s) => s.split(MD_SPAN).map((seg, k) => {
-    if (k % 2 === 0) {
-      return esc(seg)
-        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-        .replace(/\*([^*]+)\*/g, "<i>$1</i>");
-    }
-    if (seg[0] === "`") return `<code>${esc(seg.slice(1, -1))}</code>`;
-    if (seg.startsWith("$$")) return texRender(seg.slice(2, -2), true);
-    if (seg.startsWith("\\[")) return texRender(seg.slice(2, -2), true);
-    if (seg.startsWith("\\(")) return texRender(seg.slice(2, -2), false);
-    return texRender(seg.slice(1, -1), false);
-  }).join("");
+  /* 行内变换: 先把代码/公式整段换成占位符, 再做 **粗体** / *斜体*。
+     不能先按公式 split 再逐段套正则 —— 模型很爱写
+     `**$d^2_{\Pi,i}$：点到切平面的距离**`, 那样 ** 的开闭会落到
+     公式两侧的不同片段里, 永远配不上对, 于是 ** 被原样显示出来。
+     占位符让粗斜体可以跨公式配对, 同时公式内部仍不参与 Markdown 变换。 */
+  const inline = (s) => {
+    const kept = [];
+    const masked = String(s).replace(MD_SPAN_G,
+      (m) => `\u0000${kept.push(m) - 1}\u0000`);
+    return esc(masked)
+      // 要求紧邻非空白, 避免把 "a * b * c" 这类乘号当成强调
+      .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[^*])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, "$1<i>$2</i>")
+      .replace(/\u0000(\d+)\u0000/g, (_, n) => {
+        const seg = kept[+n];
+        if (seg[0] === "`") return `<code>${esc(seg.slice(1, -1))}</code>`;
+        if (seg.startsWith("$$")) return texRender(seg.slice(2, -2), true);
+        if (seg.startsWith("\\[")) return texRender(seg.slice(2, -2), true);
+        if (seg.startsWith("\\(")) return texRender(seg.slice(2, -2), false);
+        return texRender(seg.slice(1, -1), false);
+      });
+  };
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   const nextNonBlank = (k) => {
     while (k < lines.length && !lines[k].trim()) k++;

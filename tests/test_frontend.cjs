@@ -175,6 +175,24 @@ test('math renderer escapes html in every position', () => {
   }
 });
 
+test('bold pairs across inline math and code', () => {
+  const { run } = setup();
+  // 模型很爱这样写; 旧实现先按公式 split 再逐段套正则,
+  // ** 的开闭落在公式两侧的不同片段里, 永远配不上对 -> 原样显示 **
+  const html = run(`mdRender(${JSON.stringify('**$d^2_{\\Pi,i}$：点到切平面的距离**')})`);
+  assert.match(html, /<b>/);
+  assert.match(html, /class="katex"/);
+  assert.doesNotMatch(visibleOf(html), /\*\*/);   // 不残留星号
+  // 一个粗体里跨多个公式
+  const multi = run(`mdRender(${JSON.stringify('**$\\lambda_{bound}$、$\\lambda_{reg}$**：权重')})`);
+  assert.match(multi, /<b>/);
+  assert.equal((multi.match(/class="katex"/g) || []).length, 2);
+  // 粗体包行内代码同理
+  assert.match(run(`mdRender(${JSON.stringify('**调用 `run()` 之后**')})`), /<b>.*<code>/);
+  // 乘号不能被当成斜体(旧的 /\*([^*]+)\*/ 会误伤)
+  assert.doesNotMatch(run('mdRender("计算 3 * 4 * 5 的结果")'), /<i>/);
+});
+
 test('export excludes failed paragraphs and labels partial output', () => {
   const { context, element, run } = setup();
   let blobParts;

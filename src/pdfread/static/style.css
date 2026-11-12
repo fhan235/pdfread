@@ -49,10 +49,22 @@
 
   /* ---------- 顶栏 ---------- */
   header {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 10px 16px; background: var(--panel);
+    display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap;
+    padding: 7px 14px; background: var(--panel);
     border-bottom: 1px solid var(--line); flex: 0 0 auto;
   }
+  /* 功能分组: 组内元素不换行(成套控件不被拆散), 换行以整组为单位。
+     组之间用细竖线分隔, 比纯空隙更能看出"哪几个是一类"。
+     align-items:center + 固定行高让折行后各组垂直居中对齐, 不参差 */
+  header { align-content: center; row-gap: 6px; }
+  header .grp { display: inline-flex; align-items: center; gap: 6px;
+                flex: 0 0 auto; min-height: 30px; }
+  header .grp + .grp::before {
+    content: ""; align-self: center; height: 18px; width: 1px;
+    margin: 0 4px 0 0; background: var(--line); flex: 0 0 auto;
+  }
+  header .grp > label { flex: 0 0 auto; }
+  header .dash { color: var(--dim); }
   /* ---------- 文档标题栏(功能栏下面一行) ---------- */
   #docbar { display: flex; align-items: baseline; gap: 10px;
             padding: 6px 16px; background: var(--panel);
@@ -78,8 +90,9 @@
   .spacer { flex: 1; }
   button {
     background: var(--accent); color: #fff; border: 0;
-    padding: 7px 14px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: 500;
+    padding: 6px 11px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+    flex: 0 0 auto;
   }
   button:hover { filter: brightness(1.1); }
   button:disabled { background: #39405200; border: 1px solid var(--line);
@@ -100,18 +113,26 @@
   input, select {
     background: #0e1016; color: var(--fg);
     border: 1px solid var(--line); border-radius: 6px;
-    padding: 6px 9px; font-size: 13px;
+    padding: 5px 8px; font-size: 13px;
+  }
+  /* 顶栏里的数字框: 去掉 number 的步进箭头, 省出横向空间 */
+  header input[type="number"] { -moz-appearance: textfield; }
+  header input[type="number"]::-webkit-outer-spin-button,
+  header input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
   }
   /* 顶栏字号滑块 */
-  .fontctl { display: flex; align-items: center; gap: 7px; }
-  .fontctl .a { color: var(--dim); user-select: none; }
+  .fontctl { display: inline-flex; align-items: center; gap: 5px;
+             flex: 0 0 auto; }
+  .fontctl .a { color: var(--dim); user-select: none; line-height: 1; }
   .fontctl .a.sm { font-size: 12px; }
-  .fontctl .a.lg { font-size: 17px; font-weight: 600; }
+  .fontctl .a.lg { font-size: 16px; font-weight: 600; }
   .fontctl input[type="range"] {
-    width: 130px; padding: 0; accent-color: var(--accent);
+    width: 86px; padding: 0; accent-color: var(--accent);
     cursor: pointer; background: transparent; border: 0;
+    vertical-align: middle;
   }
-  .fontctl .fv { min-width: 34px; font-size: 12px; color: var(--dim);
+  .fontctl .fv { min-width: 26px; font-size: 12px; color: var(--dim);
                  text-align: right; font-variant-numeric: tabular-nums; }
   body.light .fontctl input[type="range"] { background: transparent; }
   /* 纸张 / 护眼主题: 在浅色体系上只覆盖配色变量 */
@@ -170,9 +191,10 @@
            overflow-x: auto; }
   /* PDF 缩放: 页面宽度按比例放大, 超出栏宽可横向滚动 */
   #left .imgwrap { width: calc(var(--zoom, 1) * 100%); margin: 0 auto; }
-  .zoomctl { display: flex; align-items: center; gap: 5px; }
-  .zoomctl button { padding: 2px 9px; font-size: 14px; line-height: 1.4; }
-  .zoomctl .zv { min-width: 44px; text-align: center; font-size: 12px;
+  .zoomctl { display: inline-flex; align-items: center; gap: 3px;
+             flex: 0 0 auto; }
+  .zoomctl button { padding: 2px 8px; font-size: 14px; line-height: 1.4; }
+  .zoomctl .zv { min-width: 42px; text-align: center; font-size: 12px;
                  color: var(--dim); font-variant-numeric: tabular-nums;
                  cursor: pointer; user-select: none; }
   .zoomctl .zv:hover { color: var(--accent); }
@@ -624,3 +646,26 @@
            border-radius: 8px; padding: 10px 13px; font-size: 13px;
            line-height: 1.7; white-space: pre-wrap; word-break: break-word;
            box-shadow: 0 8px 24px #00000080; }
+
+  /* ---------- 顶栏窄窗口适配(置于末尾: 需覆盖前面的基础规则) ---------- */
+  /* Mac 原生窗口常在 1100~1400, 顶栏控件多, 逐级让位以维持单行。
+     让位的都是设置面板或快捷键另有入口的低频控件, 不丢功能。 */
+  @media (max-width: 1520px) {
+    .fontctl input[type="range"] { width: 62px; }
+    .fontctl .a.lg, .fontctl .fv { display: none; }
+  }
+  @media (max-width: 1400px) {
+    .fontctl { display: none; }   /* 字号改走: 设置 → 阅读 → 译文字号 */
+  }
+  @media (max-width: 1320px) {
+    header { gap: 4px 6px; padding: 7px 10px; }
+    header .grp { gap: 4px; }
+    header .grp + .grp::before { margin-right: 2px; }
+    button { padding: 6px 8px; }
+    .zoomctl { display: none; }   /* 缩放改走: Ctrl/⌘ + 滚轮 */
+  }
+  @media (max-width: 1100px) {
+    #btnSync { display: none; }   /* 默认即开, 低频切换 */
+    header .grp > label { display: none; }   /* 「页」「跳到」留输入框即可 */
+    #jumpTo::placeholder { color: var(--dim); }
+  }
