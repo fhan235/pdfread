@@ -146,7 +146,13 @@
            title="输入自定义模型名，失焦自动保存" />
     <button id="btnSum" class="ghost" title="生成全文的结构化速读摘要（缓存，重开免费）">✦ 速读摘要</button>
   </div>
+  <div class="qasess">
+    <select id="qaSessSel" title="切换对话（每个文档各自独立）"></select>
+    <button id="qaNew" class="ghost" title="新建对话">＋</button>
+    <button id="qaDel" class="ghost" title="删除当前对话">×</button>
+  </div>
   <div id="qaList"></div>
+  <div class="splitter" id="splitQaIn" title="拖拽调整输入框高度"></div>
   <div class="qabar">
     <textarea id="qaIn" rows="2"
       placeholder="就当前文档提问，Enter 发送 / Shift+Enter 换行"></textarea>

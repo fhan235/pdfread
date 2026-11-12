@@ -2,7 +2,7 @@
 /* 每个标签保存一份面板快照(HTML+滚动位置+页码范围),
    切换时恢复; 未激活标签的翻译流会停掉, 已翻段落留在服务端缓存,
    回来后重新翻译可秒出已缓存部分 */
-let tabs = [];      // {id, info, leftHTML, rightHTML, leftTop, rightTop, pStart, pEnd, running}
+let tabs = [];      // {id, info, leftHTML, rightHTML, leftTop, rightTop, pStart, pEnd, running, qaSessions, qaSid}
 let activeTab = null;
 
 const curTab = () => tabs.find((t) => t.id === activeTab);
@@ -40,8 +40,8 @@ function snapshotTab() {
     leftHTML: left.innerHTML,
     leftTop: left.scrollTop, rightTop: right.scrollTop,
     pStart: $("#pStart").value, pEnd: $("#pEnd").value,
-    qaHist: qaHist,
   });
+  qaSaveTab(t);   // 问答会话组(多对话窗口)按标签各存一份
 }
 
 function restoreTab(t) {
@@ -80,7 +80,7 @@ function restoreTab(t) {
   }
   right.classList.toggle("polish-mode", t.view === "polished");
   $("#btnPolish").textContent = t.view === "polished" ? "逐页" : "润色";
-  qaHist = t.qaHist || [];
+  qaLoadTab(t);
   renderQA();
   renderTOC();
   lastProg = (INFO && INFO.progress) || 0;

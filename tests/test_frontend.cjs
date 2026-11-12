@@ -65,6 +65,40 @@ test('translation request identifies the tab document', () => {
   assert.match(run('es.url'), /doc=document-a/);
 });
 
+test('markdown table renders even with blank lines between rows', () => {
+  const { run } = setup();
+  const md = '| 项 | 约束的方向 |\n\n|---|---|\n\n| a | **b** |\n\n之后的正文';
+  const html = run(`mdRender(${JSON.stringify(md)})`);
+  assert.match(html, /<table>/);
+  assert.equal((html.match(/<tr>/g) || []).length, 2);
+  assert.match(html, /<b>b<\/b>/);
+  assert.match(html, /<p>之后的正文<\/p>/);   // 表后正文不被吞进表格
+});
+
+test('markdown renderer keeps code blocks verbatim and escapes html', () => {
+  const { run } = setup();
+  const html = run(`mdRender(${JSON.stringify('前言\n```\n| 纸 |\n<script>x</script>\n```')})`);
+  assert.match(html, /<pre class="md-pre">/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test('qa sessions keep their histories separate', () => {
+  const { context, run } = setup();
+  context.confirm = () => true;
+  run('tabs = [{id:"d1"}]; activeTab = "d1"; qaLoadTab(tabs[0]);');
+  run('qaHist.push({role:"user",content:"第一个问题"})');
+  run('qaNewSession(); qaHist.push({role:"user",content:"第二个问题"})');
+  assert.equal(run('qaSessions.length'), 2);
+  assert.equal(run('qaHist.length'), 1);
+  run(`qaSwitchSession(${run('qaSessions[0].id')})`);
+  assert.equal(run('qaHist[0].content'), '第一个问题');
+  assert.equal(run('tabs[0].qaSessions.length'), 2);   // 会话组随标签快照保存
+  run('document.querySelector("#qaDel").onclick()');
+  assert.equal(run('qaSessions.length'), 1);
+  assert.equal(run('qaHist[0].content'), '第二个问题');
+});
+
 test('export excludes failed paragraphs and labels partial output', () => {
   const { context, element, run } = setup();
   let blobParts;

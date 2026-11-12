@@ -62,7 +62,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
 | 运行实例 | `cache_dir()/runtime.json` | `{pid, port}`，桌面版单实例探测 |
 | 更新工作区 | `cache_dir()/update/` | `pending.json` 更新回执、`update.log` 安装器日志、`staging-*` 解压出的新版本、`backup-*` 替换时的旧文件（下次检查时清理）；下载包在 `cache_dir()/downloads/` |
-| 前端偏好 | localStorage `pdfread.prefs` | theme/themeCustom/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/expFmt/expSrc/italicSrc/efont/eline/efontFam/efontCustom/skipVersion |
+| 前端偏好 | localStorage `pdfread.prefs` | theme/themeCustom/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/qaInH/expFmt/expSrc/italicSrc/efont/eline/efontFam/efontCustom/skipVersion |
 | 会话标签 | sessionStorage `pdfread.doc` | 当前标签 id |
 
 ## 前端地图（static/，无构建，多文件）
@@ -79,12 +79,12 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 文件 | 职责 | 关键状态/函数 |
 |---|---|---|
 | `js/state.js` | 全局状态与 `$` 简写；页面心跳与 pagehide 上报 | `INFO`、`left/right`、`es/esP`、`fileSerial` |
-| `js/tabs.js` | 多文档标签 + 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`（含 qaHist、润色视图快照）；`addOrActivateTab()`；`init()` |
+| `js/tabs.js` | 多文档标签 + 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`（含问答会话组 `qaSessions`、润色视图快照）；`addOrActivateTab()`；`init()` |
 | `js/pages.js` | 左栏懒加载（SVG/章节）、翻译 SSE、润色、滚动同步、目录、阅读进度 | `buildLeft()`（imgwrap+hlayer / echapter）；`run()`/`renderPage()`；`togglePolish()`；`tidy`/`esc`；`centerLeft()`；`scrollToPage()`；`renderTOC()` |
 | `js/library.js` | 文库侧栏（文件夹/标签/搜索/移动/移除） | `LIB`/`libScope`；`renderLibrary()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
 | `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
-| `js/panels.js` | 分割条拖拽 + AI 问答（流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaHist`/`mdRender()`（先转义）/`qaSend()`/`qaSummary()`；`loadQaModel` |
+| `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（先转义；支持表格/代码块/引用/分割线，容忍行间空行与未闭合代码块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
 | `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
 
@@ -102,6 +102,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
 - **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, 模型) 缓存。
+- **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。
