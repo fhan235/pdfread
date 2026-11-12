@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PDF 双栏对照阅读器</title>
 <link rel="icon" type="image/png" href="/icon.png" />
+<!-- KaTeX 本地自托管(含 woff2 字体), 不访问任何 CDN -->
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body class="light">
@@ -379,6 +381,8 @@
 <script src="/static/js/library.js"></script>
 <script src="/static/js/highlight.js"></script>
 <script src="/static/js/links.js"></script>
+<!-- 必须在 mathtex.js 之前: 后者渲染时直接调用全局 katex -->
+<script src="/static/vendor/katex/katex.min.js"></script>
 <script src="/static/js/mathtex.js"></script>
 <script src="/static/js/panels.js"></script>
 <script src="/static/js/ui.js"></script>

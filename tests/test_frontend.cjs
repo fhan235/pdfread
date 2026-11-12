@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
+// 公式渲染交给本地自托管的 KaTeX, 与浏览器里加载的是同一份文件
+const katex = require('../src/pdfread/static/vendor/katex/katex.min.js');
 // 前端按功能拆成多个经典脚本, 共享全局作用域, 加载顺序即依赖顺序
 const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'links', 'mathtex', 'panels', 'ui', 'prefs'];
 const script = JS_FILES
@@ -31,6 +33,7 @@ function setup() {
     fetch: async () => ({ ok: false, json: async () => ({ detail: 'Invalid PDF' }) }),
     EventSource: function(url) { this.url = url; this.addEventListener = () => {}; },
     FormData: class { append() {} },
+    katex,
   });
   vm.runInContext(script, context);
   return { context, element, run: code => vm.runInContext(code, context) };
@@ -99,17 +102,23 @@ test('qa sessions keep their histories separate', () => {
   assert.equal(run('qaHist[0].content'), '第二个问题');
 });
 
+// KaTeX 的 MathML 里有一份 <annotation> 保留原始 LaTeX(用于朗读与复制),
+// 断言"没有残留裸 TeX"时要先把它剥掉, 只看真正渲染出来的部分
+const visibleOf = (html) => html.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/g, '');
+
 test('math renders inline and as display blocks', () => {
   const { run } = setup();
   const md = '顶点 $v$ 的能量\n\n$$\n\n\\min_{v\\in\\text{voxel}} e(v)=\\sum_i d^2_{\\Pi,i}+\\lambda_{\\text{reg}}\\,d^2_{\\bar q}\n\n$$\n\n收尾';
   const html = run(`mdRender(${JSON.stringify(md)})`);
   assert.match(html, /<div class="md-math">/);      // $$ 单独成行也认
+  assert.match(html, /class="katex-display"/);      // 公式块按 display 模式排版
+  assert.match(html, /class="katex"/);              // 行内 $v$ 同样渲染
   assert.match(html, /∑/);
   assert.match(html, /λ/);
-  assert.match(html, /mlim/);                       // 公式块里 \sum 的限标上下排
-  assert.match(html, /class="mover"><i>q<\/i>/);    // \bar q 的上划线盖在 q 上, 不是空格
-  assert.match(html, /mss/);                        // d^2_{\Pi,i} 上下标堆叠
-  assert.doesNotMatch(html, /\\sum|\\lambda|\\text/); // 不残留裸 TeX
+  assert.match(html, /<msubsup/);                   // d^2_{\Pi,i} 上下标堆叠
+  assert.match(html, /accent/);                     // \bar q 的上划线
+  assert.doesNotMatch(visibleOf(html), /\\sum|\\lambda|\\text/);  // 不残留裸 TeX
+  assert.match(html, /<annotation encoding="application\/x-tex">/); // 可复制回 LaTeX
   assert.match(html, /<p>收尾<\/p>/);
 });
 
@@ -118,26 +127,51 @@ test('math does not break table cells and spares currency', () => {
   const md = '| 符号 | 含义 |\n|---|---|\n| $\\lVert v\\rVert^2$ | 范数 |';
   const html = run(`mdRender(${JSON.stringify(md)})`);
   assert.equal((html.match(/<td/g) || []).length, 2);   // 公式里的内容没把单元格切坏
-  assert.match(html, /‖/);
+  assert.match(html, /∥/);                              // KaTeX 用 U+2225 排 \lVert
   // 金额不是公式: 不能被当成行内数学吃掉
   assert.match(run('mdRender("价格 $5 和 $10 之间")'), /<p>价格 \$5 和 \$10 之间<\/p>/);
   // 行内代码里的 $ 保持原样
   assert.match(run('mdRender("`$x^2$`")'), /<code>\$x\^2\$<\/code>/);
 });
 
+test('math tolerates latex document environments and partial streams', () => {
+  const { run } = setup();
+  // 模型常把 \begin{equation} 和 \label{} 一起输出, KaTeX 不认, 需先剥掉
+  const eq = run(`mdRender(${JSON.stringify('$$\\begin{equation}\\label{eq:1} a^2+b^2=c^2 \\end{equation}$$')})`);
+  assert.match(eq, /class="katex-display"/);
+  assert.doesNotMatch(eq, /katex-error/);
+  assert.doesNotMatch(visibleOf(eq), /equation|label/);
+  // 流式输出到一半的公式不能让整块消失: 以原文+错误色呈现
+  const half = run(`mdRender(${JSON.stringify('$$\\frac{a}{')})`);
+  assert.match(half, /<div class="md-math">/);
+  assert.match(half, /katex-error/);
+  assert.match(half, /frac/);
+  // LLM 常用但 KaTeX 没内置的命令由宏兜住, 不整条报错
+  assert.doesNotMatch(run('mdRender("$\\\\argmax_x f(x)$")'), /katex-error/);
+});
+
 test('math renderer escapes html in every position', () => {
   const { run } = setup();
   const cases = ['$<script>alert(1)</script>$', '$\\text{<img src=x onerror=alert(1)>}$',
-    '$x^{"><script>alert(1)</script>}$', '$\\begin{array}{"><script>bad</script>} a \\end{array}$'];
-  const ok = new Set(['p', 'b', 'i', 'sub', 'sup', 'br', 'code', 'div', 'span']);
+    '$x^{"><script>alert(1)</script>}$', '$\\begin{array}{"><script>bad</script>} a \\end{array}$',
+    // trust 为 false: 这些命令不得产出链接/图片/内联样式注入
+    '$\\href{javascript:alert(1)}{x}$', '$\\htmlStyle{background:url(x)}{y}$',
+    '$\\includegraphics{x}$'];
+  // Markdown 产出 + KaTeX 产出(span/svg/path 与 MathML)的标签全集
+  const ok = new Set(['p', 'b', 'i', 'sub', 'sup', 'br', 'code', 'div', 'span',
+    'svg', 'path', 'line', 'math', 'semantics', 'annotation', 'mrow', 'mi', 'mo',
+    'mn', 'ms', 'mtext', 'mfrac', 'msqrt', 'mroot', 'msub', 'msup', 'msubsup',
+    'mover', 'munder', 'munderover', 'mpadded', 'mphantom', 'mspace', 'mstyle',
+    'menclose', 'mtable', 'mtr', 'mtd', 'merror']);
   for (const src of cases) {
     const html = run(`mdRender(${JSON.stringify(src)})`);
-    for (const [, name, attr] of html.matchAll(/<\/?([a-zA-Z0-9]+)((?:\s+[a-zA-Z-]+="[^"<>]*")*)\s*>/g)) {
-      assert.ok(ok.has(name.toLowerCase()), `意外标签 ${name}`);
-      assert.doesNotMatch(attr, /\son[a-z]+=/i);
+    for (const [, name, attr] of html.matchAll(/<\/?([a-zA-Z0-9]+)((?:\s+[a-zA-Z:-]+="[^"<>]*")*)\s*\/?>/g)) {
+      assert.ok(ok.has(name.toLowerCase()), `意外标签 ${name}（来自 ${src}）`);
+      assert.doesNotMatch(attr, /\son[a-z]+=/i);   // 不得出现事件处理器属性
     }
-    const text = html.replace(/<\/?[a-zA-Z0-9]+(?:\s+[a-zA-Z-]+="[^"<>]*")*\s*>/g, '');
+    const text = html.replace(/<\/?[a-zA-Z0-9]+(?:\s+[a-zA-Z:-]+="[^"<>]*")*\s*\/?>/g, '');
     assert.ok(!text.includes('<') && !text.includes('>'), `残留未转义尖括号: ${text}`);
+    assert.doesNotMatch(html, /<a[\s>]|<img|<iframe|<script/i);   // 不生成可导航/可加载元素
   }
 });
 

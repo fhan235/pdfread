@@ -69,6 +69,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 
 `index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 10 个**经典脚本**，
 加载顺序即依赖顺序（`index.html` 底部的 script 标签顺序）。
+唯一的第三方前端依赖是 KaTeX，自托管在 `static/vendor/katex/`（在 `mathtex.js` 之前加载）。
 跨文件共享全局作用域：顶层 `function` 声明挂在 window 上，`const/let` 在全局词法环境，
 后续文件可直接引用先加载文件的符号。改动时注意：
 
@@ -84,7 +85,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/library.js` | 文库侧栏（文件夹/标签/搜索/移动/移除） | `LIB`/`libScope`；`renderLibrary()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
 | `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
-| `js/mathtex.js` | 数学公式渲染：自写 TeX 子集 → HTML（无外部依赖，离线可用） | `texRender(src, display)`；`TEX_SYM`/`TEX_BIG`/`TEX_FONT`/`TEX_ACC`/`TEX_ENV` 查表；不认识的命令排成正体并标 `.munk`，解析异常退回转义原文 |
+| `js/mathtex.js` | 数学公式渲染：薄封装 KaTeX（本地自托管，离线可用） | `texRender(src, display)` 是唯一出口；`TEX_MACROS`（补 LLM 常用而 KaTeX 没有的命令）；`texNormalize()` 剥掉 `\begin{equation}`/`\label{}` 等 KaTeX 不认的文档级语法；KaTeX 本体在 `static/vendor/katex/` |
 | `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaLoadTab`/`qaSaveTab`；`mdRender()`（先转义；表格/代码块/引用/分割线/公式，容忍行间空行与未闭合块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
 | `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
@@ -104,7 +105,8 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
 - **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, 模型) 缓存。
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
-- **公式渲染**：`mathtex.js` 自写 TeX 子集渲染（本机离线应用，不引 CDN/字体）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。
+- **公式渲染**：`mathtex.js` 封装 **KaTeX 0.16**（与 ChatGPT 同方案，排版基于 TeX 字体度量）。JS/CSS/woff2 字体全部自托管在 `static/vendor/katex/`，**不引任何 CDN**（本机应用，必须离线可用）；只有 woff2 会被实际请求（`@font-face` 里排第一）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。`throwOnError:false` 让流式中途的半截公式以警告色显示原文而不是整块消失；`strict:false` 允许公式里出现中文；`trust:false` 关掉 `\href`/`\html*`/`\includegraphics`；`maxExpand`/`maxSize` 限制宏展开与尺寸；`macros` 每次传副本，否则一条公式的 `\gdef` 会泄漏到后面的公式。MathML 里的 `<annotation>` 保留原始 LaTeX（可朗读、可复制回 TeX），所以断言「无裸 TeX」时要先剥掉它。
+- **主题与画布底色**：主题变量的覆盖（`body.light` / `body.theme-paper` / `body.theme-green` / 自定义）全挂在 **body** 上，而 CSS 变量只向下继承 —— `html`（即 `:root`）永远只能取到深色默认值。因此**背景只能画在 body 上，绝不能给 `html` 加 `background: var(--bg)`**：那样过滚动（macOS 橡皮筋）露出的画布会是近黑色，浅色主题下表现为「滚轮下拉整窗黑屏」。html 不画背景时，body 的背景按规范传播到画布，始终跟随主题。另配 `overscroll-behavior`（html/body 用 `none`、`.pane` 用 `contain`）从源头掐掉滚动链外溢。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。
@@ -119,7 +121,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 加翻译服务 | `translate.py` `PROVIDERS` 加一行（`models` 是界面下拉的候选列表） |
 | 改翻译/润色/问答/摘要行为 | 对应 PROMPT（translate.py L61/72/84/93）——改后建议 bump `cache_model`/`polish_model` 里的版本串 |
 | 加主题 | `style.css` 加变量块（仿 `body.theme-paper`）+ `prefs.js` 的 `THEME_ORDER/NAMES` + index.html 的 segTheme 按钮 |
-| 补公式语法 | `js/mathtex.js` 的查表（`TEX_SYM`/`TEX_BIG`/`TEX_FONT`/`TEX_ACC`/`TEX_ENV`）+ `style.css`「数学公式」区块；界面上标黄的就是没认出来的命令 |
+| 补公式语法 | 一般不用动（KaTeX 覆盖面足够）；LLM 常用而 KaTeX 没有的命令加到 `js/mathtex.js` 的 `TEX_MACROS`，KaTeX 不认的文档级环境在 `texNormalize()` 里剥掉；样式见 `style.css`「数学公式」区块。升级 KaTeX：替换 `static/vendor/katex/` 下的 `katex.min.{js,css}` 与 `fonts/*.woff2` |
 | 加划线颜色 | `library.py` `VALID_COLORS` + `style.css` `.hl` 样式 + index.html `#hlConfirm`/`#hlPop` 加按钮 |
 | 加 API | `server.py` 路由区 + `library.py` 方法 + 前端对应 js 文件用 `libPost` 调用 |
 | 改文库 UI | `style.css`「文库侧栏」区块 + `js/library.js` |
@@ -137,12 +139,14 @@ node --test tests/test_frontend.cjs                 # 前端（需 Node 22+）
 - `tests/conftest.py`：`client` fixture（TestClient + 临时目录）、`make_pdf` 合成 PDF
 - 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
 - 测试不调付费 API：monkeypatch `Translator._chat`（问答/润色）或 `Translator.translate`（翻译）
-- 前端 cjs 测试按 `JS_FILES` 顺序拼接 `static/js/*.js` 后用 vm 跑（截到 `/* 启动:` 之前），新增 js 文件要同步加入该列表，改 DOM 结构或启动逻辑时注意兼容
+- 前端 cjs 测试按 `JS_FILES` 顺序拼接 `static/js/*.js` 后用 vm 跑（截到 `/* 启动:` 之前），新增 js 文件要同步加入该列表，改 DOM 结构或启动逻辑时注意兼容；KaTeX 由测试 `require` 本地那份 `vendor/katex/katex.min.js` 后注入 vm 上下文，与浏览器用的是同一个文件
 
 ## 安全约定（改动时保持）
 
 仅绑 127.0.0.1 + TrustedHost + 同源中间件；路径白名单防穿越；上传限扩展名/200MB；
 密钥环境变量优先、不返回前端、不入日志；前端一律 `esc()`/`textContent` 输出；
+公式渲染走 KaTeX 且 `trust:false`（不产出链接/图片/内联样式注入，文本由 KaTeX 自行转义），
+`maxExpand`/`maxSize` 防构造输入耗死渲染；KaTeX 本地自托管，不引外部 CDN；
 urlfetch 拦内网/凭证 URL 并返回已验证 IP；网页转 PDF 时 Chrome 用
 `--host-resolver-rules` 钉住该 IP 且其余域名解析失败(页面级跳转/子资源拦截,
 残余风险: IP 字面量直链的内网资源不经 DNS 无法拦截)；
