@@ -1139,7 +1139,7 @@ async def summary_doc(payload: dict) -> dict:
     except Exception as e:
         raise HTTPException(400, str(e))
     text = _fulltext(current)
-    key = Cache.key(text, "summary\x00" + tr.cache_model, "zh")
+    key = Cache.key(text, tr.summary_model, "zh")
     hit = STATE["cache"].get_many([key]).get(key)
     if hit:
         return {"answer": hit, "cached": True}

@@ -103,7 +103,8 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **模型配置**：预设 + 按服务 profile 覆盖（model/base_url/qa_model）；问答/速读走 `_qa_cfg()`，qa_model 为空时跟随翻译模型。
 - **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。默认主题是浅色（`prefs.theme="light"`，`index.html` 的 `<body class="light">` 避免首屏闪深色）。
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
-- **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, 模型) 缓存。
+- **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, `summary_model`) 缓存。
+- **数学输出格式**：`QA_PROMPT` / `SUMMARY_PROMPT` 共用 `MATH_RULE`，**强制模型把数学一律写成 LaTeX**（行内 `$…$`、独立 `$$…$$`，变量与下标也要包）。没有这条时模型只给独立公式加 `$$`，行内符号写成裸文本（`d²_hat{q}`、`λ_bound`），既进不了 KaTeX，还会把 `hat{}` 这种命令名直接显示出来 —— 渲染器再好也救不了没被标记成公式的文本。规则里同时禁用 Unicode 上下标与 `\begin{equation}`/`\label{}`。
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
 - **公式渲染**：`mathtex.js` 封装 **KaTeX 0.16**（与 ChatGPT 同方案，排版基于 TeX 字体度量）。JS/CSS/woff2 字体全部自托管在 `static/vendor/katex/`，**不引任何 CDN**（本机应用，必须离线可用）；只有 woff2 会被实际请求（`@font-face` 里排第一）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。`throwOnError:false` 让流式中途的半截公式以警告色显示原文而不是整块消失；`strict:false` 允许公式里出现中文；`trust:false` 关掉 `\href`/`\html*`/`\includegraphics`；`maxExpand`/`maxSize` 限制宏展开与尺寸；`macros` 每次传副本，否则一条公式的 `\gdef` 会泄漏到后面的公式。MathML 里的 `<annotation>` 保留原始 LaTeX（可朗读、可复制回 TeX），所以断言「无裸 TeX」时要先剥掉它。
 - **主题与画布底色**：主题变量的覆盖（`body.light` / `body.theme-paper` / `body.theme-green` / 自定义）全挂在 **body** 上，而 CSS 变量只向下继承 —— `html`（即 `:root`）永远只能取到深色默认值。因此**背景只能画在 body 上，绝不能给 `html` 加 `background: var(--bg)`**：那样过滚动（macOS 橡皮筋）露出的画布会是近黑色，浅色主题下表现为「滚轮下拉整窗黑屏」。html 不画背景时，body 的背景按规范传播到画布，始终跟随主题。另配 `overscroll-behavior`（html/body 用 `none`、`.pane` 用 `contain`）从源头掐掉滚动链外溢。
@@ -119,7 +120,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 需求 | 位置 |
 |---|---|
 | 加翻译服务 | `translate.py` `PROVIDERS` 加一行（`models` 是界面下拉的候选列表） |
-| 改翻译/润色/问答/摘要行为 | 对应 PROMPT（translate.py L61/72/84/93）——改后建议 bump `cache_model`/`polish_model` 里的版本串 |
+| 改翻译/润色/问答/摘要行为 | 对应 PROMPT（`translate.py` 顶部的 `SYSTEM_PROMPT`/`POLISH_PROMPT`/`QA_PROMPT`/`SUMMARY_PROMPT`，数学格式要求在共用的 `MATH_RULE`）——翻译/润色改后要 bump `cache_model`/`polish_model` 的版本串；摘要的 `summary_model` 已绑定 `SUMMARY_PROMPT` 哈希，自动失效 |
 | 加主题 | `style.css` 加变量块（仿 `body.theme-paper`）+ `prefs.js` 的 `THEME_ORDER/NAMES` + index.html 的 segTheme 按钮 |
 | 补公式语法 | 一般不用动（KaTeX 覆盖面足够）；LLM 常用而 KaTeX 没有的命令加到 `js/mathtex.js` 的 `TEX_MACROS`，KaTeX 不认的文档级环境在 `texNormalize()` 里剥掉；样式见 `style.css`「数学公式」区块。升级 KaTeX：替换 `static/vendor/katex/` 下的 `katex.min.{js,css}` 与 `fonts/*.woff2` |
 | 加划线颜色 | `library.py` `VALID_COLORS` + `style.css` `.hl` 样式 + index.html `#hlConfirm`/`#hlPop` 加按钮 |

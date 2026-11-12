@@ -4,7 +4,8 @@ import re
 import httpx
 import pytest
 
-from pdfread.translate import Cache, TransConfig, Translator
+from pdfread.translate import (QA_PROMPT, SUMMARY_PROMPT, Cache, TransConfig,
+                               Translator)
 
 
 @pytest.fixture
@@ -63,6 +64,30 @@ def test_long_paragraph_split_and_reassembled(translator):
 def test_endpoint_separates_cache(translator):
     other = Translator(TransConfig(provider="ollama", base_url="http://localhost:9999/v1"), translator.cache)
     assert translator.cache_model != other.cache_model
+
+
+@pytest.mark.parametrize("prompt", [QA_PROMPT, SUMMARY_PROMPT])
+def test_math_must_be_latex_wrapped(prompt):
+    """前端用 KaTeX 渲染, 提示词必须要求数学一律写成 LaTeX。
+
+    少了这条, 模型只给独立公式加 $$, 行内符号写成裸文本(d²_hat{q}、λ_bound),
+    既进不了渲染器, 还会把 hat{} 这种命令名直接显示给用户。
+    """
+    assert "$...$" in prompt and "$$...$$" in prompt
+    assert "LaTeX" in prompt
+    assert "\\hat{q}" in prompt      # 明确给出正例, 否则模型爱写 hat{q}
+    assert "Unicode" in prompt       # 禁止 d² 这类上下标字符
+
+
+def test_summary_cache_tracks_its_own_prompt(translator):
+    """摘要缓存键必须绑定 SUMMARY_PROMPT。
+
+    否则改了摘要提示词后旧缓存仍命中, 用户永远看不到新格式。
+    """
+    assert translator.summary_model != translator.cache_model
+    assert translator.summary_model != translator.polish_model
+    import hashlib
+    assert hashlib.sha256(SUMMARY_PROMPT.encode()).hexdigest() in translator.summary_model
 
 
 def test_reject_unsupported_language(translator):

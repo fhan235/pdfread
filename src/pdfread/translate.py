@@ -81,13 +81,27 @@ POLISH_PROMPT = (
     "6. 保留数字、单位、专有名词缩写与公式原样。"
 )
 
+# 问答/摘要共用: 前端用 KaTeX 渲染, 必须让模型把数学一律写成 LaTeX。
+# 不加这条时模型只给独立公式加 $$, 行内符号却写成裸文本(如 d²_hat{q}、
+# λ_bound), 既进不了渲染器, 又会把 hat{} 这种命令名直接显示出来。
+MATH_RULE = (
+    "数学内容一律用 LaTeX 书写, 由前端渲染:\n"
+    "- 行内用 $...$, 独立成行的公式用 $$...$$; 变量、下标、单个符号也要包起来, "
+    "例如写 $v$、$q_i$、$\\lambda_{\\text{reg}}$、$d^2_{\\Pi,i}$。\n"
+    "- 不要用 Unicode 上下标或裸写命令名: 写 $d^2$ 而不是 d², "
+    "写 $\\hat{q}$ 而不是 hat{q}, 写 $\\bar{q}$ 而不是 q̄, "
+    "写 $\\lVert v\\rVert$ 而不是 ‖v‖。\n"
+    "- 不要加 \\begin{equation}、\\label{} 等文档级命令, 也不要给公式编号。"
+)
+
 QA_PROMPT = (
     "你是专业的文献阅读助手。用户会给你一篇文档的正文(超长时可能只保留首尾), "
     "并基于它提问。\n"
     "规则:\n"
     "1. 只依据给定文档内容回答; 文档没有依据的问题, 明确说明「文档中未提及」, 不要编造。\n"
     "2. 用简体中文回答, 简洁准确; 需要引用时给出英文原文片段。\n"
-    "3. 可以适当分点, 但不要复述问题, 不要输出与问题无关的文档总结。"
+    "3. 可以适当分点, 但不要复述问题, 不要输出与问题无关的文档总结。\n"
+    "4. " + MATH_RULE
 )
 
 SUMMARY_PROMPT = (
@@ -98,7 +112,8 @@ SUMMARY_PROMPT = (
     "规则:\n"
     "1. 只依据文档内容; 文档未体现的小节写「文档未明确」, 不要编造。\n"
     "2. 每节 1-4 条要点, 用列表; 总长度 500 字以内。\n"
-    "3. 不要复述本提示, 不要输出小节之外的内容。"
+    "3. 不要复述本提示, 不要输出小节之外的内容。\n"
+    "4. " + MATH_RULE
 )
 
 _SEG = re.compile(r"<<<(\d+)>>>")
@@ -216,6 +231,9 @@ class Translator:
         self.cache_model = "\x00".join((self.base_url, self.model, hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(), "v2"))
         # 润色结果独立命名空间, 与逐段翻译缓存互不干扰
         self.polish_model = "polish\x00" + "\x00".join((self.base_url, self.model, hashlib.sha256(POLISH_PROMPT.encode()).hexdigest(), "v1"))
+        # 摘要同理: 必须带 SUMMARY_PROMPT 的哈希, 否则改了摘要提示词
+        # (如新增数学格式要求)旧缓存仍会命中, 用户永远看不到新格式
+        self.summary_model = "summary\x00" + "\x00".join((self.base_url, self.model, hashlib.sha256(SUMMARY_PROMPT.encode()).hexdigest(), "v1"))
         self._sem = asyncio.Semaphore(cfg.concurrency)
 
     def _pack(self, texts: list[str]) -> list[list[int]]:
