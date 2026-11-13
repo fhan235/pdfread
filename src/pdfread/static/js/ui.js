@@ -85,7 +85,7 @@ async function loadDir(dir) {
   let d;
   try {
     const r = await fetch("/api/browse?dir=" + encodeURIComponent(dir));
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     d = await r.json();
   } catch (e) {
     box.innerHTML = `<div class="row"><span class="nm" style="color:#ff7a7a">${esc(String(e))}</span></div>`;
@@ -369,7 +369,7 @@ async function addRoot() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: v }),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     inp.value = "";
     pathEl.style.color = "";

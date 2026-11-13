@@ -36,6 +36,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 | `paths.py` | 跨平台路径：缓存/配置/上传/白名单根目录、图标资源、安装位置 | `cache_dir()` `config_dir()` `uploads_dir()`；`asset_icon()`；`install_target()`（一键更新定位） |
 | `epub.py` | EPUB 原生解析（章节即页） | `inspect_epub` / `read_resource`；解压大小上限防 zip bomb；`_sanitize` 去脚本/事件/内联样式/外链图 |
 | `txt.py` | TXT 原生解析（编码检测、章节识别、按字符切块） | `inspect_txt` |
+| `agent.py` | 问答的工具层：GitHub 查阅 + 网页抓取（**URL 由本模块拼接，模型只能填受正则约束的字段**） | `TOOLS`（顺序固定以命中 prompt cache）/ `NEEDS_CONFIRM`（仅 `fetch_url`）/ `run_tool`（失败返文本不抛异常）/ `exfil_warnings`（外泄特征检测）；读文件优先走 raw CDN 省 API 配额 |
 | `urlfetch.py` | URL 打开（SSRF 校验、headless 网页转 PDF） | `normalize_url` / `validate_url` / `resolve_checked`（返回已验证 IP 供连接钉扎）/ `fetch_document` |
 | `browser.py` | 系统浏览器探测 + headless 网页转 PDF | `find_browser()` / `html_to_pdf()`（`--host-resolver-rules` 钉 IP 防 SSRF） |
 | `release.py` | GitHub Release 查询与资产匹配（**无路由、无可变状态**；检查结果缓存留在 `server.py` 以便测试 patch） | `fetch_latest()`；`_pick_asset()`/`_update_proxy()`/`_update_ssl_context()` |
@@ -44,7 +45,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 
 ## HTTP API 速查（server.py）
 
-阅读：`GET /api/page/{n}.svg`（默认）· `GET /api/page/{n}.png` · `GET /api/thumb/{lib_id}.png`（文库封面，落盘缓存）· `GET /api/text/{n}` · `GET /api/translate`(SSE) · `GET /api/polish`(SSE) · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw`
+阅读：`GET /api/page/{n}.svg`（默认）· `GET /api/page/{n}.png` · `GET /api/thumb/{lib_id}.png`（文库封面，落盘缓存）· `GET /api/text/{n}` · `GET /api/translate`(SSE) · `GET /api/polish`(SSE) · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/agent-stream`(SSE, 带工具调用) · `POST /api/agent/confirm`(外部访问授权回执) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw`
 EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/{n}`(包内图片, SVG 加 CSP sandbox) L796
 文档管理：`GET /api/docs` · `POST /api/docs/close` · `GET /api/info` · `POST /api/open`(支持 `force=1` 跳过查重) · `POST /api/upload`(同) · `POST /api/open-url`(body 里 `force`) · `GET /api/browse` · `POST /api/roots`(加白名单) · `GET /api/progress`(打开任务进度轮询) · `GET /api/history` · `POST /api/history/remove`
 > 三个打开入口命中内容查重时返回 **409** `{duplicate, sha256, existing}`，不是错误而是等用户决策。
@@ -153,7 +154,7 @@ node --test tests/test_frontend.cjs                 # 前端 20 项（需 Node 2
 ```
 
 - `tests/conftest.py`：`client` fixture（TestClient + 临时目录）、`make_pdf` 合成 PDF
-- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_linemerge.py`(段落合并骨架) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
+- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_linemerge.py`(段落合并骨架) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_agent.py`(工具参数校验/授权/循环熔断) · `test_extract_settings.py`
 - 测试不调付费 API：monkeypatch `Translator._chat`（问答/润色）或 `Translator.translate`（翻译）
 - 前端 cjs 测试按 `JS_FILES` 顺序拼接 `static/js/*.js` 后用 vm 跑（截到 `/* 启动:` 之前），新增 js 文件要同步加入该列表，改 DOM 结构或启动逻辑时注意兼容；KaTeX 由测试 `require` 本地那份 `vendor/katex/katex.min.js` 后注入 vm 上下文，与浏览器用的是同一个文件
 
@@ -170,3 +171,14 @@ EPUB 解压设单文件/总量上限防 zip bomb、内嵌 SVG 加 CSP sandbox；
 更新包仅接受本仓库 Release 固定地址并校验 SHA-256（上限 500MB），tar 解压用 `filter="data"` 防越界，
 安装器只替换包内条目、绝不触碰安装目录里的其他文件；
 解析在独立进程，失败重建进程池释放句柄。
+
+**Agent 工具的安全模型与 urlfetch 不同**：urlfetch 面对的是「用户主动粘贴的 URL」（用户是决策者），
+而 agent 里 URL 由模型生成，文档中的提示注入可诱导模型外传正文，故分两层：
+L1 `github_*` 结构化工具——域名硬编码、URL 由 `agent.py` 拼接，模型只能填受正则约束的
+`repo`/`path`/`ref`（无渠道夹带正文），因此免确认，避免确认疲劳；
+L2 `fetch_url` 任意地址——必须经用户授权（SSE 推 `confirm` 事件 + 服务端 `asyncio.Event` 挂起，
+凭据是服务端生成的 token 而非模型给的 id，超时自动拒绝并清理挂起项），
+`exfil_warnings` 命中外泄特征时前端隐藏「全部允许」强制逐条决策。
+新增工具一律走 L1 结构化形态；**不要给模型通用的 `fetch_url(url)` 式自由参数**。
+循环侧有三道闸防跑飞：`AGENT_MAX_TURNS` 轮次上限、同参数重复调用拦回、
+`AGENT_MAX_TOOL_CHARS` 结果熔断（DeepSeek 在 10+ 轮循环里会重复调同一工具甚至无限重复输出）。

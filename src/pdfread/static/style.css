@@ -869,3 +869,65 @@
     header .grp > label { display: none; }   /* 「页」「跳到」留输入框即可 */
     #jumpTo::placeholder { color: var(--dim); }
   }
+
+/* ---------- Agent 联网查阅 ---------- */
+
+#qaAgentWrap, #qaAutoWrap {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--dim); cursor: pointer;
+  white-space: nowrap; user-select: none;
+}
+#qaAgentWrap input, #qaAutoWrap input { margin: 0; cursor: pointer; }
+#qaAgentWrap.on { color: var(--accent); }
+#qaAutoWrap.on { color: var(--warn); }   /* 免询问是降低防护, 用警示色 */
+
+/* 工具调用步骤: 默认折叠成一行, 点开看详情 */
+.toolstep {
+  margin: 6px 0; border: 1px solid var(--line); border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  font-size: 12px; overflow: hidden;
+}
+.toolstep > summary {
+  padding: 5px 9px; cursor: pointer; color: var(--dim);
+  display: flex; align-items: center; gap: 6px; list-style: none;
+}
+.toolstep > summary::-webkit-details-marker { display: none; }
+.toolstep .ico { flex: 0 0 auto; }
+.toolstep.run .ico { animation: toolspin 1s linear infinite; }
+.toolstep.bad > summary { color: var(--warn); }
+.toolstep pre {
+  margin: 0; padding: 8px 10px; border-top: 1px solid var(--line);
+  max-height: 180px; overflow: auto; white-space: pre-wrap;
+  word-break: break-all; color: var(--dim); font-size: 11px;
+}
+@keyframes toolspin { to { transform: rotate(360deg); } }
+
+/* 授权弹窗 */
+#agentAsk {
+  position: fixed; inset: 0; z-index: 90; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .45);
+}
+#agentAsk[hidden] { display: none; }
+#agentAsk .box {
+  width: min(460px, 92vw); padding: 18px 20px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+}
+#agentAsk h3 { margin: 0 0 8px; font-size: 15px; }
+#agentAsk .who { margin: 0 0 10px; font-size: 12px; color: var(--dim); }
+#agentAsk .url {
+  padding: 8px 10px; border-radius: 6px; background: var(--bg);
+  border: 1px solid var(--line); font-size: 12px;
+  word-break: break-all; max-height: 120px; overflow: auto;
+}
+#agentAsk .warn {
+  margin-top: 8px; padding: 7px 10px; border-radius: 6px;
+  font-size: 12px; color: #fff; background: var(--warn);
+}
+#agentAsk .tip { margin: 10px 0 0; font-size: 11px; color: var(--dim); }
+#agentAsk .btns {
+  margin-top: 14px; display: flex; gap: 8px; align-items: center;
+}
+#agentAsk .btns #agentDeny { margin-right: auto; }
+#agentAsk .btns button { font-size: 12px; }

@@ -252,7 +252,7 @@ $("#hlOk").onclick = async () => {
   try {
     // 保存到发起手势时的文档快照, 即使期间切换了标签也不串档
     const r = await libPost("/api/highlights", { doc: p.doc, page: p.page, rects: p.rects });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const m = await r.json();
     const bag = (marksByDoc[p.doc] = marksByDoc[p.doc] || {});
     (bag[p.page] = bag[p.page] || []).push(m);
@@ -294,7 +294,7 @@ $("#hlTr").onclick = async () => {
   showTrPop("翻译中…", p.x, p.y);
   try {
     const r = await libPost("/api/translate-text", { doc: p.doc, text: p.text });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     showTrPop(d.dst, p.x, p.y);
   } catch (err) {

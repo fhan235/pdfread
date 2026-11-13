@@ -466,6 +466,48 @@ $("#qaNew").onclick = () => {
   $("#qaIn").focus();
 };
 
+/* Agent 模式: 工具步骤卡渲染 + 外部访问授权弹窗 */
+
+function qaPart(p) {
+  if (p.type === "text") return mdRender(p.v);
+  if (p.type === "note") return `<div class="toolstep"><summary>${esc(p.v)}</summary></div>`;
+  const ico = p.state === "run" ? "⟳" : p.state === "bad" ? "✕" : "✓";
+  const cls = "toolstep" + (p.state === "run" ? " run" : p.state === "bad" ? " bad" : "");
+  const detail = p.detail
+    ? `<pre>${esc(p.detail)}</pre>` : "";
+  return `<details class="${cls}"><summary><span class="ico">${ico}</span>`
+    + `<span>${esc(p.summary)}</span></summary>${detail}</details>`;
+}
+
+/* 外部访问授权。
+   返回 "once" / "all" / "deny"。"all" 只在当次问答内有效, 不跨提问保留,
+   避免一次放行长期生效。 */
+function agentConfirm(d) {
+  return new Promise((resolve) => {
+    const box = $("#agentAsk");
+    const warns = d.warnings || [];
+    $("#agentAskUrl").textContent = d.url || d.summary || "";
+    $("#agentAskWarn").innerHTML = warns
+      .map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("");
+    // 有外泄特征时不提供「全部允许」, 逼停在单次决策上
+    $("#agentAllowAll").style.display = warns.length ? "none" : "";
+    box.hidden = false;
+    const done = (v) => {
+      box.hidden = true;
+      $("#agentAllow").onclick = null;
+      $("#agentAllowAll").onclick = null;
+      $("#agentDeny").onclick = null;
+      document.removeEventListener("keydown", onKey);
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === "Escape") done("deny"); };
+    $("#agentAllow").onclick = () => done("once");
+    $("#agentAllowAll").onclick = () => done("all");
+    $("#agentDeny").onclick = () => done("deny");
+    document.addEventListener("keydown", onKey);
+  });
+}
+
 async function qaSend() {
   if (qaBusy) return;
   const inp = $("#qaIn");
@@ -490,15 +532,31 @@ async function qaSend() {
   qaBusySid = qaSid;
   renderQaSessions();
   const live = () => curTab() === myTab && qaHist === myHist;
+  const agentOn = $("#qaAgent") && $("#qaAgent").checked;
+  // 本次问答内的放行状态: 开了自动模式则一开始就为真, 否则由弹窗里
+  // 的「本次全部允许」置真; 每次提问重新开始, 不跨提问保留。
+  let autoAllow = agentOn && $("#qaAuto") && $("#qaAuto").checked;
   try {
     // 流式(SSE over fetch): delta 事件逐块追加, 边收边渲染
-    const r = await libPost("/api/ask-stream", {
+    const r = await libPost(agentOn ? "/api/agent-stream" : "/api/ask-stream", {
       doc: myDoc, question: q, history: myHist.slice(0, -1),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "", answer = "";
+    const parts = [];   // 保持「思考 → 调用 → 结果」的真实时序
+    const paint = () => {
+      if (!live()) return;
+      thinking.innerHTML = parts.map(qaPart).join("");
+      list.scrollTop = list.scrollHeight;
+    };
+    const addText = (t) => {
+      answer += t;
+      const last = parts[parts.length - 1];
+      if (last && last.type === "text") last.v += t;
+      else parts.push({ type: "text", v: t });
+    };
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -510,14 +568,48 @@ async function qaSend() {
         const di = block.indexOf("data: ");
         if (di < 0) continue;
         const data = JSON.parse(block.slice(di + 6));
-        if (block.startsWith("event: delta")) {
-          answer += data.text;
-          if (live()) {   // 仍是发起标签的发起会话才更新气泡
-            thinking.innerHTML = mdRender(answer);
-            list.scrollTop = list.scrollHeight;
-          }
-        } else if (block.startsWith("event: failure")) {
+        const ev = (block.match(/^event: (\w+)/) || [])[1];
+        if (ev === "delta") {
+          addText(data.text);
+          paint();
+        } else if (ev === "failure") {
           throw new Error(data.message || "请求失败");
+        } else if (ev === "note") {
+          parts.push({ type: "note", v: data.text });
+          paint();
+        } else if (ev === "tool") {
+          parts.push({ type: "tool", id: data.id, summary: data.summary,
+                       state: "run" });
+          paint();
+        } else if (ev === "result") {
+          const it = parts.find((x) => x.type === "tool" && x.id === data.id);
+          if (it) {
+            it.state = data.ok ? "ok" : "bad";
+            it.detail = data.text || "";
+          }
+          paint();
+        } else if (ev === "confirm") {
+          // 弹窗期间暂停读取; 服务端正挂起等待这条回执
+          parts.push({ type: "tool", id: data.token, summary: data.summary,
+                       state: "run" });
+          paint();
+          const risky = (data.warnings || []).length > 0;
+          let ok;
+          if (autoAllow && !risky) {
+            // 已选「全部允许」或开启自动模式: 无风险特征的请求直接放行
+            ok = true;
+          } else {
+            const pick = await agentConfirm(data);
+            if (pick === "all") autoAllow = true;
+            ok = pick !== "deny";
+          }
+          const it = parts.find((x) => x.id === data.token);
+          if (it && !ok) { it.state = "bad"; it.detail = "你拒绝了这次访问"; }
+          paint();
+          try {
+            await libPost("/api/agent/confirm",
+                          { token: data.token, allow: ok });
+          } catch (e) { /* 服务端已超时自动拒绝 */ }
         }
       }
     }
@@ -542,6 +634,37 @@ async function qaSend() {
 
 $("#btnQA").onclick = toggleQA;
 $("#qaSend").onclick = qaSend;
+
+/* 联网查阅 / 免询问开关: 记住上次选择 */
+(function initAgentToggle() {
+  const cb = $("#qaAgent"), auto = $("#qaAuto");
+  if (!cb) return;
+  const sync = () => {
+    $("#qaAgentWrap").classList.toggle("on", cb.checked);
+    // 免询问只在联网查阅开启时有意义
+    $("#qaAutoWrap").style.display = cb.checked ? "" : "none";
+    $("#qaAutoWrap").classList.toggle("on", auto && auto.checked);
+  };
+  try {
+    cb.checked = localStorage.getItem("qaAgent") === "1";
+    if (auto) auto.checked = localStorage.getItem("qaAuto") === "1";
+  } catch (e) { /* 隐私模式下不可用 */ }
+  sync();
+  cb.addEventListener("change", () => {
+    try { localStorage.setItem("qaAgent", cb.checked ? "1" : "0"); } catch (e) { }
+    sync();
+    qaStatus(cb.checked
+      ? "已开启联网查阅：可让 AI 去看 GitHub 仓库，耗时与花费会增加"
+      : "已关闭联网查阅");
+  });
+  if (auto) auto.addEventListener("change", () => {
+    try { localStorage.setItem("qaAuto", auto.checked ? "1" : "0"); } catch (e) { }
+    sync();
+    qaStatus(auto.checked
+      ? "已开启免询问：访问外部网页不再逐条确认（疑似外泄时仍会拦下）"
+      : "已关闭免询问：每次访问外部网页都会询问");
+  });
+})();
 
 /* 问答模型: 独立于翻译模型, 按服务记忆; 选「默认」则与翻译模型一致 */
 async function loadQaModel() {
@@ -571,7 +694,7 @@ async function saveQaModel() {
   const v = sel.value === "__custom__" ? $("#qaModel").value.trim() : sel.value;
   try {
     const r = await libPost("/api/settings", { qa_model: v });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     qaStatus("问答模型已保存");
   } catch (e) {
     qaStatus("模型保存失败：" + e, true);
@@ -612,7 +735,7 @@ async function qaSummary() {
   const live = () => curTab() === myTab && qaHist === myHist;
   try {
     const r = await libPost("/api/summary", { doc: INFO.doc });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     if (live()) thinking.innerHTML = mdRender(d.answer);
     myHist.push({ role: "user", content: "生成速读摘要" },

@@ -344,7 +344,7 @@ async function saveCfg() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     INFO = await r.json();
     $("#cfgKey").value = "";
     CFG = await (await fetch("/api/settings")).json();
@@ -428,7 +428,7 @@ async function saveParse(patch) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     PARSE = { options: d.options, applied_paper_mode: d.applied_paper_mode };
     syncSeg("segPaper", d.options.paper_mode);

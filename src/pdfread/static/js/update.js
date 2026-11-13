@@ -61,7 +61,7 @@ $("#btnProxySave").onclick = async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ proxy: $("#cfgProxy").value.trim() }),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     h.textContent = "代理已保存，立即生效";
     h.className = "hint ok";
   } catch (e) {
@@ -106,7 +106,7 @@ $("#updDl").onclick = async () => {
   h.className = "hint";
   try {
     const r = await fetch("/api/update/download", { method: "POST" });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     h.textContent = `已下载 v${d.version}：${d.path}`
       + " —— 退出应用后用新文件替换即可，配置与缓存不受影响";
@@ -149,7 +149,7 @@ $("#updApply").onclick = async () => {
   }, 400);
   try {
     const r = await fetch("/api/update/download?task=" + task, { method: "POST" });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const d = await r.json();
     clearInterval(timer);
     bar.style.display = "none";

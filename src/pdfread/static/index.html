@@ -179,6 +179,12 @@
     <select id="qaModelSel" title="问答/速读使用的模型，默认与翻译模型一致"></select>
     <input id="qaModel" placeholder="自定义模型名" style="display:none"
            title="输入自定义模型名，失焦自动保存" />
+    <label id="qaAgentWrap" title="开启后可联网查阅 GitHub 仓库与网页，耗时和花费会明显增加">
+      <input type="checkbox" id="qaAgent" /> 联网查阅
+    </label>
+    <label id="qaAutoWrap" title="不再逐条询问外部网页访问；检测到疑似外泄文档内容时仍会弹窗">
+      <input type="checkbox" id="qaAuto" /> 免询问
+    </label>
     <button id="btnSum" class="ghost" title="生成全文的结构化速读摘要（缓存，重开免费）">✦ 速读摘要</button>
   </div>
   <div id="qaHint"></div>
@@ -195,6 +201,21 @@
 
 <div id="hlPop"><button id="hlDel" class="ghost">删除划线</button></div>
 <div id="hlConfirm"><button id="hlOk">划线</button><button id="hlTr" class="ghost">翻译</button><button id="hlCopy" class="ghost">复制</button></div>
+
+<div id="agentAsk" hidden>
+  <div class="box">
+    <h3>允许访问外部网页？</h3>
+    <p class="who">AI 想要访问以下地址，这不是你直接发起的请求。</p>
+    <div class="url" id="agentAskUrl"></div>
+    <div id="agentAskWarn"></div>
+    <p class="tip">若地址与你的问题无关，或参数里夹带了文档内容，请拒绝。</p>
+    <div class="btns">
+      <button id="agentDeny" class="ghost">拒绝</button>
+      <button id="agentAllowAll" class="ghost">本次问答全部允许</button>
+      <button id="agentAllow">允许本次</button>
+    </div>
+  </div>
+</div>
 <div id="trPop"></div>
 <button id="linkBack" title="回到跳转前的位置（Alt+← 或鼠标侧键）">← 返回</button>
 

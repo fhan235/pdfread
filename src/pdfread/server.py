@@ -274,6 +274,19 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _base_cfg() -> TransConfig:
+    """取当前翻译配置的副本。
+
+    未配置模型时 STATE["cfg"] 为 None, 直接 replace() 会抛 TypeError
+    变成 500 纯文本, 前端解析不出原因; 这里转成可读的 400。
+    """
+    cfg = STATE["cfg"]
+    if cfg is None:
+        raise HTTPException(
+            400, "尚未配置模型，请先在顶部设置里选择服务并填写 API Key")
+    return replace(cfg)
+
+
 # ---------- 路由 ----------
 
 @app.get("/", response_class=HTMLResponse)
@@ -1063,7 +1076,7 @@ async def translate_stream(
     if not 1 <= start <= end <= total or lang != "zh":
         raise HTTPException(400, "页码范围无效，或目标语言不是 zh")
 
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _base_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
@@ -1132,7 +1145,7 @@ async def polish_stream(doc: str = "", lang: str = "zh") -> StreamingResponse:
     if lang != "zh":
         raise HTTPException(400, "目标语言仅支持 zh")
 
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _base_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
@@ -1222,7 +1235,7 @@ def _ask_args(payload: dict):
 def _qa_cfg() -> TransConfig:
     """问答/速读专用配置: 若该服务配置了独立的问答模型则覆盖, 否则沿用翻译模型。"""
     from .settings import profile
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _base_cfg()
     qa = profile(cfg.provider).get("qa_model", "").strip()
     if qa:
         cfg = replace(cfg, model=qa)
@@ -1272,6 +1285,96 @@ async def ask_stream(payload: dict) -> StreamingResponse:
     )
 
 
+AGENT_BUDGET = 24000      # agent 模式正文预算: 要给工具结果留出 token
+CONFIRM_TIMEOUT = 180.0   # 授权弹窗等待上限(秒), 到点视为拒绝
+
+# 待用户授权的工具调用: token -> {event, allow}
+# 本应用为本地单进程(绑 127.0.0.1), 用进程内字典即可, 无需跨进程协调
+_PENDING: dict[str, dict] = {}
+
+
+@app.post("/api/agent/confirm")
+async def agent_confirm(payload: dict) -> dict:
+    """前端授权回执: 唤醒挂起的 agent 循环。"""
+    token = str(payload.get("token", ""))
+    item = _PENDING.get(token)
+    if not item:
+        raise HTTPException(404, "该授权请求已失效")
+    item["allow"] = bool(payload.get("allow"))
+    item["event"].set()
+    return {"ok": True}
+
+
+@app.post("/api/agent-stream")
+async def agent_stream(payload: dict) -> StreamingResponse:
+    """Agent 问答(SSE): 可调用 GitHub/网页工具, L2 工具需用户授权。"""
+    current, question, clean = _ask_args(payload)
+    cfg: TransConfig = _qa_cfg()
+    try:
+        tr = Translator(cfg, STATE["cache"])
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+    async def gen():
+        # 模型给的 call_id -> 服务端授权 token
+        _PENDING_TOKEN: dict[str, str] = {}
+
+        # 授权回调: 先把 confirm 事件推给前端, 再在此挂起等待回执
+        async def confirm(cid: str, name: str, args: dict) -> bool:
+            token = _PENDING_TOKEN.get(cid)
+            if not token:
+                return False
+            item = _PENDING[token]
+            try:
+                await asyncio.wait_for(item["event"].wait(),
+                                       timeout=CONFIRM_TIMEOUT)
+            except asyncio.TimeoutError:
+                return False
+            finally:
+                _PENDING.pop(token, None)
+                _PENDING_TOKEN.pop(cid, None)
+            return bool(item["allow"])
+
+        try:
+            if "flash" in (cfg.model or "").lower():
+                yield _sse("note", {
+                    "text": "当前是 flash 类模型，多轮工具调用容易跑偏，"
+                            "建议换用更强的模型"})
+            async for kind, val in tr.agent_stream(
+                    question, _fulltext(current, AGENT_BUDGET), clean,
+                    confirm):
+                if kind == "delta":
+                    yield _sse("delta", {"text": val})
+                elif kind == "confirm":
+                    # 用服务端生成的 token 做凭据, 不直接采信模型给的 id
+                    token = uuid4().hex
+                    _PENDING[token] = {"event": asyncio.Event(),
+                                       "allow": False}
+                    _PENDING_TOKEN[val["id"]] = token
+                    yield _sse("confirm", {
+                        "token": token, "summary": val["summary"],
+                        "url": val.get("args", {}).get("url", ""),
+                        "warnings": val.get("warnings") or []})
+                else:
+                    yield _sse(kind, val if isinstance(val, dict)
+                               else {"text": val})
+            yield _sse("done", {"ok": True})
+        except RuntimeError as e:
+            yield _sse("failure", {"message": str(e)})
+        except Exception:
+            yield _sse("failure", {"message": "问答请求中断，请重试"})
+        finally:
+            # 客户端中途断开时清理挂起项, 防止协程与字典泄漏
+            for t in list(_PENDING_TOKEN.values()):
+                _PENDING.pop(t, None)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/translate-text")
 async def translate_text(payload: dict) -> dict:
     """划词翻译: 翻译一小段选中文字(走翻译缓存, 重复划不重复计费)。"""
@@ -1279,7 +1382,7 @@ async def translate_text(payload: dict) -> dict:
     text = str(payload.get("text", "")).strip()
     if not text or len(text) > 20000:
         raise HTTPException(400, "文本为空或过长(上限 20000 字符)")
-    cfg: TransConfig = replace(STATE["cfg"])
+    cfg: TransConfig = _base_cfg()
     try:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:

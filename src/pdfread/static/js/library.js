@@ -250,7 +250,7 @@ async function openLibDoc(id) {
       + `<div class="busybar"><div class="indet"></div></div></div>`, false), 300);
   try {
     const r = await libPost("/api/library/open", { id });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    if (!r.ok) throw new Error(await errText(r));
     const data = await r.json();
     if (serial !== fileSerial) return;
     const existing = tabs.find((x) => x.id === data.doc);
