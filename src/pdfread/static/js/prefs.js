@@ -5,7 +5,7 @@ let prefs = { theme: "light", font: "15", layout: "side", layoutPrev: "side",
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340, qaInH: 56,
               toc: false, efont: 16, eline: 1.9, efontFam: "serif",
               efontCustom: "",
-              libDense: true, libSort: "opened", libFull: false };
+              libView: "list", libSort: "opened", libShelf: false };
 
 /* 书籍(EPUB/TXT)字体预设 */
 const EFONT_STACKS = {
@@ -26,6 +26,24 @@ function ebookFont() {
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); }
   catch (e) { /* 忽略损坏的偏好 */ }
+  migratePrefs();
+}
+
+/* 旧偏好键迁移: 改名后不能让用户已保存的状态丢掉 */
+function migratePrefs() {
+  // v1.3.0~1.3.1: libDense(true=紧凑) -> libView("list"/"detail")
+  if ("libDense" in prefs) {
+    if (!("libView" in prefs) || prefs.libView === "list") {
+      prefs.libView = prefs.libDense === false ? "detail" : "list";
+    }
+    delete prefs.libDense;
+  }
+  // v1.3.1: libFull(大屏) -> libShelf(书架)
+  if ("libFull" in prefs) {
+    prefs.libShelf = !!prefs.libFull;
+    delete prefs.libFull;
+  }
+  if (prefs.libView !== "detail") prefs.libView = "list";
 }
 function savePrefs() {
   localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
@@ -148,7 +166,7 @@ function applyPrefs() {
   syncSeg("segExpFmt", prefs.expFmt);
   syncSeg("segExpSrc", prefs.expSrc);
   if (prefs.lib) showLibrary();
-  if (prefs.libFull) setLibFull(true);   // 大屏状态跨会话保留
+  if (prefs.libShelf) setShelf(true);   // 书架状态跨会话保留
   document.body.classList.toggle("qa", !!prefs.qa);
   const bq = $("#btnQA");
   if (bq) bq.classList.toggle("on", !!prefs.qa);

@@ -276,7 +276,7 @@
   }
 
   /* ---------- 译文 ---------- */
-  /* 左右对照: 译文铺满栏宽, 大屏不留白 */
+  /* 左右对照: 译文铺满栏宽, 宽屏不留白 */
   #right .pg { padding: 14px 32px 30px; }
   .para { margin: 0 0 14px; cursor: default; border-radius: 5px;
           padding: 3px 7px; margin-left: -7px; transition: background .12s;
@@ -532,7 +532,7 @@
   .doc .headrow { display: flex; align-items: flex-start; gap: 8px; }
   .libck { flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent);
            cursor: pointer; width: auto; }
-  /* ---------- 紧凑行 ---------- */
+  /* ---------- 列表行(侧栏默认) ---------- */
   /* 一行一篇, 约 40px: 几十篇也能一屏看十几篇, 不用反复翻页 */
   .doc.dense { display: flex; align-items: center; gap: 7px;
                padding: 5px 9px; margin-bottom: 2px; border-radius: 6px;
@@ -557,7 +557,7 @@
   .doc.dense .warn2 { flex: 0 0 auto; color: var(--warn); font-weight: 700;
                       font-size: 12px; }
   /* 侧栏较窄时(默认 320px)把次要信息让给标题: 日期/划线数先隐藏,
-     它们在舒适模式和 title 提示里都还能看到 */
+     它们在详情模式和 title 提示里都还能看到 */
   @container libmain (max-width: 420px) {
     .doc.dense .dt, .doc.dense .hl2 { display: none; }
   }
@@ -765,25 +765,25 @@
                      word-break: break-all; }
   #dup .acts { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
 
-  /* ---------- 文库大屏模式 ---------- */
+  /* ---------- 文库书架(封面网格, 铺满整窗) ---------- */
   /* 文库铺满整窗, 阅读区与问答面板让位; 侧栏那套布局规则原样保留,
-     退出大屏后一切照旧 */
-  body.libfull #libView { width: auto !important; flex: 1 1 auto; }
-  body.libfull main, body.libfull #qaPanel,
-  body.libfull #splitLib, body.libfull #splitQA { display: none !important; }
-  body.libfull #libView { border-right: 0; }
+     返回阅读后一切照旧 */
+  body.shelf #libView { width: auto !important; flex: 1 1 auto; }
+  body.shelf main, body.shelf #qaPanel,
+  body.shelf #splitLib, body.shelf #splitQA { display: none !important; }
+  body.shelf #libView { border-right: 0; }
   /* 侧栏(文件夹/标签)改为左列, 不再压在列表上方 */
-  body.libfull #libView { flex-direction: row; }
-  body.libfull #libSide { flex: 0 0 210px; max-height: none;
+  body.shelf #libView { flex-direction: row; }
+  body.shelf #libSide { flex: 0 0 210px; max-height: none;
                           border-bottom: 0; border-right: 1px solid var(--line);
                           padding: 14px 10px; }
-  body.libfull .libbar { padding: 12px 18px; gap: 8px; }
-  body.libfull .libbar input { flex: 1 1 280px; max-width: 460px; }
-  body.libfull #libSort { flex: 0 0 auto; }
-  body.libfull .libcount { padding: 10px 18px 0; font-size: 12px; }
-  body.libfull #libList { padding: 12px 18px 40px; }
+  body.shelf .libbar { padding: 12px 18px; gap: 8px; }
+  body.shelf .libbar input { flex: 1 1 280px; max-width: 460px; }
+  body.shelf #libSort { flex: 0 0 auto; }
+  body.shelf .libcount { padding: 10px 18px 0; font-size: 12px; }
+  body.shelf #libList { padding: 12px 18px 40px; }
   /* 网格: 卡片不压缩, 窗口越宽排越多 */
-  body.libfull #libList {
+  body.shelf #libList {
     display: grid; align-content: start;
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
     gap: 18px 16px;
@@ -835,7 +835,17 @@
               padding: 2px 7px; background: var(--panel); }
   .card:hover .rm { opacity: 1; }
   .card .rm:hover { color: #ff7a7a; border-color: #ff7a7a; }
-  #btnLibFull.on { border-color: var(--accent); color: var(--accent); }
+  #btnShelf.on { border-color: var(--accent); color: var(--accent); }
+  /* 列表/详情 分段控件: 当前项高亮, 不再用"按钮文字=当前状态"这种有歧义的写法 */
+  .libseg { display: inline-flex; flex: 0 0 auto;
+            border: 1px solid var(--line); border-radius: 6px;
+            overflow: hidden; }
+  .libseg button { background: transparent; color: var(--dim);
+                   border: 0; border-radius: 0; font-size: 12px;
+                   padding: 4px 9px; }
+  .libseg button + button { border-left: 1px solid var(--line); }
+  .libseg button:hover { color: var(--fg); filter: none; }
+  .libseg button.on { background: var(--accent); color: #fff; }
 
   /* ---------- 顶栏窄窗口适配(置于末尾: 需覆盖前面的基础规则) ---------- */
   /* Mac 原生窗口常在 1100~1400, 顶栏控件多, 逐级让位以维持单行。

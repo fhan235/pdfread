@@ -137,9 +137,12 @@
         <option value="title">标题</option>
         <option value="progress">阅读进度</option>
       </select>
-      <button id="btnDense" class="ghost" title="切换列表密度">紧凑</button>
-      <button id="btnLibFull" class="ghost"
-              title="文库铺满窗口，带封面的网格视图">大屏</button>
+      <span class="libseg" id="libViewSeg" title="侧栏的呈现方式">
+        <button data-v="list" title="一行一篇，便于快速定位">列表</button>
+        <button data-v="detail" title="卡片式，显示文件名、划线、所属文件夹">详情</button>
+      </span>
+      <button id="btnShelf" class="ghost"
+              title="以封面网格铺满窗口浏览文库">书架</button>
       <button id="btnImport" class="ghost">导入文件</button>
     </div>
     <div class="libbulk" id="libBulk"></div>

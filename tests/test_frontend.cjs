@@ -226,7 +226,7 @@ test('bold pairs across inline math and code', () => {
   assert.doesNotMatch(run('mdRender("计算 3 * 4 * 5 的结果")'), /<i>/);
 });
 
-test('library dense rows stay compact and sorting works', () => {
+test('library list rows stay compact and sorting works', () => {
   const { element, run } = setup();
   run(`LIB = {folders:[{id:1,name:"方向一"}], tags:[], documents:[
     {id:1,path:"/a",name:"a.pdf",title:"Zeta 最后",folder_id:null,added:100,
@@ -234,9 +234,9 @@ test('library dense rows stay compact and sorting works', () => {
     {id:2,path:"/b",name:"b.pdf",title:"Alpha 最先",folder_id:1,added:300,
      last_opened:100,highlights:0,tags:[],progress:3,pages:28,exists:false}
   ]}`);
-  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  run('prefs.libView = "list"; prefs.libSort = "opened"; renderLibrary()');
   const html = element('#libList').innerHTML;
-  assert.match(html, /class="doc dense/);        // 紧凑行
+  assert.match(html, /class="doc dense/);        // 列表行
   assert.doesNotMatch(html, /data-move=/);       // 文件夹下拉不再每行一个
   assert.match(html, /data-ck="1"/);             // 批量勾选框
   assert.match(html, /96%|96/);                  // 进度百分比
@@ -262,7 +262,7 @@ test('library bulk selection drops rows that left the filter', () => {
     {id:2,path:"/b",name:"b.pdf",title:"乙",folder_id:null,added:2,last_opened:2,
      highlights:0,tags:[],progress:0,pages:10,exists:true}
   ]}`);
-  run('prefs.libDense = true; prefs.libSort = "opened"');
+  run('prefs.libView = "list"; prefs.libSort = "opened"');
   run('libSel.add(1); libSel.add(2); renderLibrary()');
   assert.equal(run('libSel.size'), 2);
   assert.match(element('#libBulk').innerHTML, /已选 2 篇/);
@@ -272,20 +272,20 @@ test('library bulk selection drops rows that left the filter', () => {
   assert.ok(run('libSel.has(1)'));
 });
 
-test('library titles and tags are escaped in dense rows', () => {
+test('library titles and tags are escaped in list rows', () => {
   const { element, run } = setup();
   run(`LIB = {folders:[], tags:[], documents:[
     {id:1,path:"/<x>",name:"n.pdf",title:"<img src=x onerror=alert(1)>",
      folder_id:null,added:1,last_opened:1,highlights:0,
      tags:["<script>bad</script>"],progress:0,pages:0,exists:true}
   ]}`);
-  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  run('prefs.libView = "list"; prefs.libSort = "opened"; renderLibrary()');
   const html = element('#libList').innerHTML;
   assert.doesNotMatch(html, /<img|<script/);
   assert.match(html, /&lt;img/);
 });
 
-test('library full-screen mode renders cards with covers', () => {
+test('library shelf renders cards with covers', () => {
   const { element, run } = setup();
   run(`LIB = {folders:[], tags:[], documents:[
     {id:7,path:"/a",name:"a.pdf",title:"有封面的",folder_id:null,added:1,
@@ -293,12 +293,12 @@ test('library full-screen mode renders cards with covers', () => {
     {id:8,path:"/b",name:"b.epub",title:"文件丢了的",folder_id:null,added:2,
      last_opened:2,highlights:0,tags:[],progress:0,pages:0,exists:false}
   ]}`);
-  // 大屏由 body.libfull 决定, 与侧栏密度设置无关
-  run('document.body.classList.contains = (c) => c === "libfull"');
-  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  // 书架由 body.shelf 决定, 与侧栏的 列表/详情 无关
+  run('document.body.classList.contains = (c) => c === "shelf"');
+  run('prefs.libView = "list"; prefs.libSort = "opened"; renderLibrary()');
   const html = element('#libList').innerHTML;
   assert.match(html, /class="card/);
-  assert.doesNotMatch(html, /class="doc dense/);        // 大屏不走紧凑行
+  assert.doesNotMatch(html, /class="doc dense/);        // 书架不走列表行
   assert.match(html, /\/api\/thumb\/7\.png/);           // 存在的文档请求封面
   assert.match(html, /loading="lazy"/);                 // 懒加载, 不一次性拉完
   assert.doesNotMatch(html, /\/api\/thumb\/8\.png/);    // 文件已丢失的不请求
