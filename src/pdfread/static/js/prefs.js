@@ -4,7 +4,8 @@ let prefs = { theme: "light", font: "15", layout: "side", layoutPrev: "side",
               expFmt: "txt", expSrc: "dst", italicSrc: false, lib: false,
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340, qaInH: 56,
               toc: false, efont: 16, eline: 1.9, efontFam: "serif",
-              efontCustom: "" };
+              efontCustom: "",
+              libDense: true, libSort: "opened" };
 
 /* 书籍(EPUB/TXT)字体预设 */
 const EFONT_STACKS = {

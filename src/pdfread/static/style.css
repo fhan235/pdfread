@@ -505,13 +505,71 @@
   .libitem .fx:hover { color: #ff7a7a; }
   body.light .libitem:hover { background: #00000008; }
   #libMain { flex: 1; min-width: 0; min-height: 0;
-             display: flex; flex-direction: column; }
-  .libbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-            padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .libbar input { flex: 1; min-width: 120px; }
-  #libList { flex: 1; overflow-y: auto; padding: 10px 12px 40px; }
+             display: flex; flex-direction: column;
+             /* 容器查询锚点: 行内元素按侧栏实际宽度(而非窗口宽)取舍显示 */
+             container-type: inline-size; container-name: libmain; }
+  .libbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+            padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  /* 搜索独占一行, 排序与两个按钮并排第二行: 窄侧栏下最省高度的排法 */
+  .libbar input { flex: 1 1 100%; min-width: 0; }
+  #libSort { font-size: 12px; padding: 4px 6px; flex: 1 1 60px;
+             min-width: 0; }
+  .libbar button { flex: 0 0 auto; font-size: 12px; padding: 5px 9px; }
+  /* 批量操作条: 有选中时才出现 */
+  .libbulk { display: none; align-items: center; gap: 8px;
+             padding: 7px 12px; border-bottom: 1px solid var(--line);
+             background: #4f8cff14; font-size: 12px; }
+  .libbulk.on { display: flex; }
+  .libbulk .n { color: var(--accent); font-weight: 600; flex: 0 0 auto; }
+  .libbulk .grow { flex: 1; }
+  .libbulk select { font-size: 12px; padding: 3px 7px; max-width: 140px; }
+  .libbulk button { font-size: 12px; padding: 3px 9px; }
+  .libcount { padding: 6px 12px 0; font-size: 11px; color: var(--dim); }
+  #libList { flex: 1; overflow-y: auto; padding: 8px 12px 40px; }
   .doc { border: 1px solid var(--line); border-radius: 8px;
          background: var(--panel); padding: 11px 15px; margin-bottom: 10px; }
+  .doc[data-sel] { border-color: var(--accent); background: #4f8cff14; }
+  .doc .headrow { display: flex; align-items: flex-start; gap: 8px; }
+  .libck { flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent);
+           cursor: pointer; width: auto; }
+  /* ---------- 紧凑行 ---------- */
+  /* 一行一篇, 约 40px: 几十篇也能一屏看十几篇, 不用反复翻页 */
+  .doc.dense { display: flex; align-items: center; gap: 7px;
+               padding: 5px 9px; margin-bottom: 2px; border-radius: 6px;
+               border-color: transparent; background: transparent;
+               position: relative; }
+  .doc.dense:hover { background: #ffffff0c; border-color: var(--line); }
+  body.light .doc.dense:hover { background: #00000008; }
+  .doc.dense[data-sel] { border-color: var(--accent); background: #4f8cff14; }
+  .doc.dense .t { font-weight: 500; cursor: pointer; font-size: 13px;
+                  overflow: hidden; text-overflow: ellipsis;
+                  white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+  .doc.dense .t:hover { color: var(--accent); }
+  /* 标题优先吃掉剩余空间; .grow 只作最小间隔 */
+  .doc.dense .grow { flex: 0 0 4px; }
+  .doc.dense .chip { flex: 0 0 auto; font-size: 10.5px; padding: 0 7px;
+                     max-width: 72px; overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap; }
+  .doc.dense .pct, .doc.dense .hl2, .doc.dense .dt {
+    flex: 0 0 auto; font-size: 11px; color: var(--dim);
+    font-variant-numeric: tabular-nums; }
+  .doc.dense .dt { min-width: 62px; text-align: right; }
+  .doc.dense .warn2 { flex: 0 0 auto; color: var(--warn); font-weight: 700;
+                      font-size: 12px; }
+  /* 侧栏较窄时(默认 320px)把次要信息让给标题: 日期/划线数先隐藏,
+     它们在舒适模式和 title 提示里都还能看到 */
+  @container libmain (max-width: 420px) {
+    .doc.dense .dt, .doc.dense .hl2 { display: none; }
+  }
+  /* 操作按钮浮现时, 把右侧次要信息让位, 避免把标题挤没 */
+  .doc.dense:hover .pct, .doc.dense:hover .dt,
+  .doc.dense:hover .hl2 { display: none; }
+  /* 操作按钮: 悬停才浮现, 平时不占位置(这是省出高度的关键) */
+  .doc.dense .rowops { display: none; gap: 5px; flex: 0 0 auto;
+                       margin-left: 2px; }
+  .doc.dense:hover .rowops { display: flex; }
+  .doc.dense .rowops button { font-size: 11px; padding: 2px 8px; }
+  .doc.dense.gone .t { color: var(--dim); text-decoration: line-through; }
   .doc.gone { opacity: .55; }
   .doc .t { font-weight: 600; cursor: pointer; width: fit-content;
             max-width: 100%; overflow: hidden; text-overflow: ellipsis; }

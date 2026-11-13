@@ -225,6 +225,65 @@ test('bold pairs across inline math and code', () => {
   assert.doesNotMatch(run('mdRender("计算 3 * 4 * 5 的结果")'), /<i>/);
 });
 
+test('library dense rows stay compact and sorting works', () => {
+  const { element, run } = setup();
+  run(`LIB = {folders:[{id:1,name:"方向一"}], tags:[], documents:[
+    {id:1,path:"/a",name:"a.pdf",title:"Zeta 最后",folder_id:null,added:100,
+     last_opened:300,highlights:2,tags:["综述"],progress:27,pages:28,exists:true},
+    {id:2,path:"/b",name:"b.pdf",title:"Alpha 最先",folder_id:1,added:300,
+     last_opened:100,highlights:0,tags:[],progress:3,pages:28,exists:false}
+  ]}`);
+  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  const html = element('#libList').innerHTML;
+  assert.match(html, /class="doc dense/);        // 紧凑行
+  assert.doesNotMatch(html, /data-move=/);       // 文件夹下拉不再每行一个
+  assert.match(html, /data-ck="1"/);             // 批量勾选框
+  assert.match(html, /96%|96/);                  // 进度百分比
+  assert.match(html, /warn2/);                   // 文件失效标记
+  assert.equal(element('#libCount').textContent, '2 篇');
+
+  // 排序: 四种都按各自字段取首项
+  const first = () => run('LIB.documents.slice().sort(LIB_SORTS[prefs.libSort].fn)[0].title');
+  assert.equal(first(), 'Zeta 最后');
+  run('prefs.libSort = "added"');
+  assert.equal(first(), 'Alpha 最先');
+  run('prefs.libSort = "title"');
+  assert.equal(first(), 'Alpha 最先');
+  run('prefs.libSort = "progress"');
+  assert.equal(first(), 'Zeta 最后');
+});
+
+test('library bulk selection drops rows that left the filter', () => {
+  const { element, run } = setup();
+  run(`LIB = {folders:[{id:1,name:"方向一"}], tags:[], documents:[
+    {id:1,path:"/a",name:"a.pdf",title:"甲",folder_id:1,added:1,last_opened:3,
+     highlights:0,tags:[],progress:0,pages:10,exists:true},
+    {id:2,path:"/b",name:"b.pdf",title:"乙",folder_id:null,added:2,last_opened:2,
+     highlights:0,tags:[],progress:0,pages:10,exists:true}
+  ]}`);
+  run('prefs.libDense = true; prefs.libSort = "opened"');
+  run('libSel.add(1); libSel.add(2); renderLibrary()');
+  assert.equal(run('libSel.size'), 2);
+  assert.match(element('#libBulk').innerHTML, /已选 2 篇/);
+  // 切到只含文档 1 的文件夹: 不可见的选中项被清理, 不会误操作到看不见的文档
+  run('libScope = {kind:"folder", id:1, name:""}; renderLibrary()');
+  assert.equal(run('libSel.size'), 1);
+  assert.ok(run('libSel.has(1)'));
+});
+
+test('library titles and tags are escaped in dense rows', () => {
+  const { element, run } = setup();
+  run(`LIB = {folders:[], tags:[], documents:[
+    {id:1,path:"/<x>",name:"n.pdf",title:"<img src=x onerror=alert(1)>",
+     folder_id:null,added:1,last_opened:1,highlights:0,
+     tags:["<script>bad</script>"],progress:0,pages:0,exists:true}
+  ]}`);
+  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  const html = element('#libList').innerHTML;
+  assert.doesNotMatch(html, /<img|<script/);
+  assert.match(html, /&lt;img/);
+});
+
 test('export excludes failed paragraphs and labels partial output', () => {
   const { context, element, run } = setup();
   let blobParts;

@@ -131,8 +131,17 @@
   <div id="libMain">
     <div class="libbar">
       <input id="libSearch" placeholder="搜索标题、文件名、标签…" />
+      <select id="libSort" title="排序方式">
+        <option value="opened">最近打开</option>
+        <option value="added">最近添加</option>
+        <option value="title">标题</option>
+        <option value="progress">阅读进度</option>
+      </select>
+      <button id="btnDense" class="ghost" title="切换列表密度">紧凑</button>
       <button id="btnImport" class="ghost">导入文件</button>
     </div>
+    <div class="libbulk" id="libBulk"></div>
+    <div class="libcount" id="libCount"></div>
     <div id="libList"></div>
   </div>
 </div>
