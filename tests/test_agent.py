@@ -10,7 +10,7 @@ import types
 
 import pytest
 
-from src.pdfread import agent
+from pdfread import agent
 
 
 # ---------- 参数校验 ----------
@@ -122,7 +122,7 @@ def test_only_fetch_url_needs_confirm():
 
 def _translator(turns):
     """构造只跑假模型的 Translator。"""
-    from src.pdfread.translate import Translator
+    from pdfread.translate import Translator
     tr = object.__new__(Translator)
 
     async def fake_turn(client, messages, tools):
@@ -203,7 +203,7 @@ def test_turn_limit_forces_final_answer(monkeypatch):
                             "args": json.dumps({"repo": "a/b",
                                                 "path": f"f{n}.py"})}])]
 
-    from src.pdfread import translate as T
+    from pdfread import translate as T
     evs = _collect(_translator(turns))
     tools_run = [e for e in evs if e[0] == "tool"]
     assert len(tools_run) <= T.AGENT_MAX_TURNS
@@ -221,7 +221,7 @@ def test_missing_cfg_gives_readable_400():
     import asyncio
     from collections import namedtuple
     from fastapi import HTTPException
-    from src.pdfread import server
+    from pdfread import server
 
     P = namedtuple("P", "text")
     old_doc, old_cfg = server.STATE.get("doc"), server.STATE.get("cfg")
