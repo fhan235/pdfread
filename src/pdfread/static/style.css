@@ -535,9 +535,12 @@
              flex-direction: column; background: var(--panel);
              border-left: 1px solid var(--line); }
   body.qa #qaPanel { display: flex; }
-  #qaHint { padding: 8px 12px; font-size: 11px; color: var(--dim);
+  /* 状态条: 平时不占空间, 有消息才出现(见 panels.js 的 qaStatus) */
+  #qaHint { display: none; padding: 7px 12px; font-size: 11.5px;
+            color: var(--accent); background: #4f8cff14;
             border-bottom: 1px solid var(--line); }
-  .qatools { padding: 7px 12px; border-bottom: 1px solid var(--line);
+  #qaHint.on { display: block; }
+  .qatools { padding: 7px 10px; border-bottom: 1px solid var(--line);
              display: flex; gap: 8px; }
   #qaModel, #qaModelSel { flex: 1; min-width: 0; font-size: 12px;
              padding: 3px 8px; background: #0e1016; color: var(--fg);
@@ -545,18 +548,53 @@
   body.light #qaModel, body.light #qaModelSel { background: #fff; }
   #qaModel:focus, #qaModelSel:focus { outline: 1px solid var(--accent); }
   .qatools button { font-size: 12px; padding: 3px 10px; }
-  /* 对话会话条(多对话窗口): 下拉切换 + 新建/删除 */
-  .qasess { padding: 6px 12px; border-bottom: 1px solid var(--line);
-            display: flex; gap: 6px; align-items: center; }
-  #qaSessSel { flex: 1; min-width: 0; font-size: 12px; padding: 3px 8px;
-               background: #0e1016; color: var(--fg);
-               border: 1px solid var(--line); border-radius: 6px; }
-  body.light #qaSessSel { background: #fff; }
-  #qaSessSel:focus { outline: 1px solid var(--accent); }
-  .qasess button { flex: 0 0 auto; font-size: 13px; line-height: 1;
-                   padding: 4px 9px; }
-  .qasess button:disabled { opacity: .4; cursor: default; }
+  /* ---------- 对话标签栏(横向, 像浏览器标签) ---------- */
+  /* 面板本身只有 340px 宽, 放不下几个标签 —— 所以标签可收缩,
+     收到最小宽度后整条横向滚动, ＋ 固定在右侧不随之滚走 */
+  .qasess { display: flex; align-items: flex-end; gap: 6px;
+            padding: 5px 8px 0; border-bottom: 1px solid var(--line);
+            background: var(--panel); }
+  .qatabs { display: flex; align-items: flex-end; gap: 2px;
+            flex: 1; min-width: 0; overflow-x: auto;
+            scrollbar-width: none; }
+  .qatabs::-webkit-scrollbar { height: 0; }
+  .qtab { display: flex; align-items: center; gap: 4px;
+          padding: 5px 7px 6px; font-size: 12px; color: var(--dim);
+          border: 1px solid transparent; border-bottom: 0;
+          border-radius: 7px 7px 0 0; cursor: pointer;
+          white-space: nowrap; user-select: none; position: relative;
+          flex: 1 1 auto; min-width: 46px; max-width: 130px; }
+  .qtab .nm { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  /* 未选中的标签之间加细竖线, 否则只是几段浮在空中的文字, 看不出边界。
+     紧邻当前标签的那条不画(当前标签自带边框) */
+  .qtab + .qtab::before {
+    content: ""; position: absolute; left: -1px; top: 6px; bottom: 6px;
+    width: 1px; background: var(--line);
+  }
+  .qtab.on::before, .qtab.on + .qtab::before { background: transparent; }
+  .qtab:hover { background: #ffffff0a; }
+  body.light .qtab:hover { background: #00000008; }
+  /* 当前标签优先拿空间: 标题尽量显示全, 其余的让位 */
+  .qtab.on { background: var(--bg); color: var(--fg);
+             border-color: var(--line); top: 1px;
+             flex-grow: 1.6; min-width: 60px; }
+  .qtab .dot { color: var(--ok); font-size: 8px; flex: 0 0 auto; }
+  .qtab .x { border: 0; background: transparent; color: var(--dim);
+             font-size: 13px; line-height: 1; padding: 1px 3px;
+             border-radius: 4px; cursor: pointer; flex: 0 0 auto;
+             opacity: 0; }
+  /* × 平时不显示, 免得在窄标签里挤掉标题; 悬停或当前标签才露出 */
+  .qtab:hover .x, .qtab.on .x { opacity: 1; }
+  .qtab .x:hover { color: #ff7a7a; background: #ffffff14; }
+  body.light .qtab .x:hover { background: #00000010; }
+  #qaNew { flex: 0 0 auto; padding: 3px 9px; font-size: 13px;
+           line-height: 1.3; margin-bottom: 4px; }
   #qaList { flex: 1; overflow-y: auto; padding: 12px; }
+  /* 空对话时的引导: 占对话区而不是常驻横幅, 有内容后自动消失 */
+  .qaempty { color: var(--dim); text-align: center; padding: 42px 18px; }
+  .qaempty .ttl { font-size: 14px; font-weight: 600; color: var(--fg);
+                  margin-bottom: 7px; }
+  .qaempty .sub { font-size: 12px; line-height: 1.7; }
   .qmsg { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px;
           font-size: 13px; line-height: 1.7; word-break: break-word;
           overflow-x: auto; }   /* 超长行内公式在气泡内滚动, 不挤宽面板 */

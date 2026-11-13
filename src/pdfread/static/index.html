@@ -156,18 +156,18 @@
 
 <div class="splitter" id="splitQA" title="拖拽调整问答面板宽度"></div>
 <aside id="qaPanel">
-  <div id="qaHint"></div>
+  <!-- 对话标签栏: 横向排列, 多了可横向滚动(＋ 固定在右侧不滚走) -->
+  <div class="qasess">
+    <div class="qatabs" id="qaTabs"></div>
+    <button id="qaNew" class="ghost" title="新建对话">＋</button>
+  </div>
   <div class="qatools">
     <select id="qaModelSel" title="问答/速读使用的模型，默认与翻译模型一致"></select>
     <input id="qaModel" placeholder="自定义模型名" style="display:none"
            title="输入自定义模型名，失焦自动保存" />
     <button id="btnSum" class="ghost" title="生成全文的结构化速读摘要（缓存，重开免费）">✦ 速读摘要</button>
   </div>
-  <div class="qasess">
-    <select id="qaSessSel" title="切换对话（每个文档各自独立）"></select>
-    <button id="qaNew" class="ghost" title="新建对话">＋</button>
-    <button id="qaDel" class="ghost" title="删除当前对话">×</button>
-  </div>
+  <div id="qaHint"></div>
   <div id="qaList"></div>
   <div class="splitter" id="splitQaIn" title="拖拽调整输入框高度"></div>
   <div class="qabar">

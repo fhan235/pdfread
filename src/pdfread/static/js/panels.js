@@ -69,15 +69,13 @@ let qaHist = [];       // === 当前会话的 hist (同一数组对象, 不可�
 let qaBusy = false;
 let qaBusySid = 0;     // 正在等待回答的会话, 用于在列表里标记 ●
 
-/* 会话标题: 取首条用户提问, 没有则「新对话」 */
-function qaSessTitle(s) {
+/* 会话标题: 取首条用户提问, 没有则「新对话」。
+   maxLen 小一些: 标签很窄, 过长的标题只会被省略号截掉 */
+function qaSessTitle(s, maxLen) {
   const first = (s.hist || []).find((m) => m.role === "user");
   const t = first ? first.content.replace(/\s+/g, " ").trim() : "";
-  return t ? (t.length > 20 ? t.slice(0, 20) + "…" : t) : "新对话";
-}
-
-function qaCurSess() {
-  return qaSessions.find((s) => s.id === qaSid);
+  const n = maxLen || 20;
+  return t ? (t.length > n ? t.slice(0, n) + "…" : t) : "新对话";
 }
 
 /* 新建会话并切到它; 返回新会话 */
@@ -107,13 +105,64 @@ function qaSaveTab(t) {
   t.qaSid = qaSid;
 }
 
+/* 渲染对话标签栏(横向, 像浏览器标签): 当前高亮, 等待回答的显示 ●,
+   每个标签自带 ×。只剩一个空对话时不给删(删了也要立刻新建一个) */
 function renderQaSessions() {
-  const sel = $("#qaSessSel");
-  sel.innerHTML = qaSessions.map((s, i) =>
-    `<option value="${s.id}">${s.id === qaBusySid ? "● " : ""}`
-    + `${i + 1}. ${esc(qaSessTitle(s))}</option>`).join("");
-  sel.value = String(qaSid);
-  $("#qaDel").disabled = qaSessions.length === 1 && !qaHist.length;
+  const box = $("#qaTabs");
+  const only = qaSessions.length === 1;
+  box.innerHTML = qaSessions.map((s, i) => {
+    const on = s.id === qaSid;
+    const busy = s.id === qaBusySid;
+    const title = qaSessTitle(s, 14);
+    const canDel = !(only && !(s.hist || []).length);
+    return `<div class="qtab${on ? " on" : ""}" data-sid="${s.id}"`
+      + ` title="${esc(qaSessTitle(s, 40))}">`
+      + (busy ? `<span class="dot">●</span>` : "")
+      + `<span class="nm">${esc(title)}</span>`
+      + (canDel ? `<button class="x" data-del="${s.id}"`
+        + ` title="关闭该对话">×</button>` : "")
+      + `</div>`;
+  }).join("");
+  // 切换后让当前标签滚进视野(标签多时会横向溢出)
+  const cur = box.querySelector(".qtab.on");
+  if (cur && cur.scrollIntoView) {
+    cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+/* 状态条: 平时不占垂直空间, 有消息才出现, 片刻后自动消失 */
+let qaStatusTimer = null;
+function qaStatus(msg, keep) {
+  const el = $("#qaHint");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("on", !!msg);
+  clearTimeout(qaStatusTimer);
+  if (msg && !keep) {
+    qaStatusTimer = setTimeout(() => {
+      el.textContent = "";
+      el.classList.remove("on");
+    }, 3200);
+  }
+}
+
+/* 空对话时的说明: 放在对话区内部, 有内容后自动让位,
+   不像原来那样用一条常驻横幅永久占掉 ~52px */
+function qaEmptyHint() {
+  const box = $("#qaList");
+  if (!box) return;
+  const old = box.querySelector(".qaempty");
+  if (qaHist.length) { if (old) old.remove(); return; }
+  if (old) return;
+  const d = document.createElement("div");
+  d.className = "qaempty";
+  const ready = INFO && INFO.loaded;
+  d.innerHTML = `<div class="ttl">${ready ? "就这篇文档提问" : "先打开一篇文档"}</div>`
+    + `<div class="sub">${ready
+      ? `已载入全文约 ${esc(((INFO.chars || 0) / 10000).toFixed(1))} 万字符。`
+        + `每次提问都会把正文发送给翻译服务，超长只保留首尾。`
+      : "打开后即可基于全文问答，或一键生成速读摘要。"}</div>`;
+  box.appendChild(d);
 }
 
 function toggleQA() {
@@ -292,6 +341,8 @@ function addQaBubble(role, text) {
   if (role === "user") d.textContent = text;   // 用户输入纯文本
   else d.innerHTML = mdRender(text);           // AI 回答按 Markdown 渲染
   const list = $("#qaList");
+  const empty = list.querySelector && list.querySelector(".qaempty");
+  if (empty) empty.remove();                   // 有内容了, 空状态让位
   list.appendChild(d);
   list.scrollTop = list.scrollHeight;
   return d;
@@ -303,10 +354,7 @@ function renderQA() {
   const box = $("#qaList");
   box.innerHTML = "";
   for (const m of qaHist) addQaBubble(m.role, m.content);
-  $("#qaHint").textContent = (INFO && INFO.loaded)
-    ? `基于当前文档全文（约 ${(INFO.chars / 10000).toFixed(1)} 万字符），`
-      + `每次提问都会将正文发送给翻译服务，超长只保留首尾`
-    : "请先打开文档";
+  qaEmptyHint();
 }
 
 /* 切换/新建/删除会话: 只换视图, 不影响正在跑的请求(它写进自己捕获的历史数组) */
@@ -318,27 +366,45 @@ function qaSwitchSession(id) {
   qaSaveTab(curTab());
   renderQA();
 }
-$("#qaSessSel").addEventListener("change", (e) => qaSwitchSession(e.target.value));
-$("#qaNew").onclick = () => {
-  qaNewSession();
-  qaSaveTab(curTab());
-  renderQA();
-  $("#qaIn").focus();
-};
-$("#qaDel").onclick = () => {
-  const s = qaCurSess();
+
+/* 关闭某个对话; 关掉当前的就切到相邻一个 */
+function qaDelSession(id) {
+  const s = qaSessions.find((x) => x.id === Number(id));
   if (!s) return;
-  if (s.hist.length && !confirm(`删除对话「${qaSessTitle(s)}」？\n该对话的问答记录会丢失。`)) return;
+  if ((s.hist || []).length
+      && !confirm(`关闭对话「${qaSessTitle(s)}」？\n该对话的问答记录会丢失。`)) return;
   const i = qaSessions.indexOf(s);
   qaSessions.splice(i, 1);
   if (!qaSessions.length) qaNewSession();
-  else {
+  else if (s.id === qaSid) {
     const next = qaSessions[Math.min(i, qaSessions.length - 1)];
     qaSid = next.id;
     qaHist = next.hist;
   }
   qaSaveTab(curTab());
   renderQA();
+}
+
+/* 标签栏事件委托: × 关闭, 其余位置切换 */
+$("#qaTabs").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-del]");
+  if (x) { e.stopPropagation(); qaDelSession(x.dataset.del); return; }
+  const tab = e.target.closest("[data-sid]");
+  if (tab) qaSwitchSession(tab.dataset.sid);
+});
+/* 中键关闭, 和浏览器标签一致 */
+$("#qaTabs").addEventListener("auxclick", (e) => {
+  if (e.button !== 1) return;
+  const tab = e.target.closest("[data-sid]");
+  if (!tab) return;
+  e.preventDefault();
+  qaDelSession(tab.dataset.sid);
+});
+$("#qaNew").onclick = () => {
+  qaNewSession();
+  qaSaveTab(curTab());
+  renderQA();
+  $("#qaIn").focus();
 };
 
 async function qaSend() {
@@ -347,7 +413,7 @@ async function qaSend() {
   const q = inp.value.trim();
   if (!q) return;
   if (!INFO || !INFO.loaded) {
-    $("#qaHint").textContent = "请先打开文档";
+    qaStatus("请先打开文档");
     return;
   }
   qaBusy = true;
@@ -445,9 +511,9 @@ async function saveQaModel() {
   try {
     const r = await libPost("/api/settings", { qa_model: v });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    $("#qaHint").textContent = "问答模型已保存";
+    qaStatus("问答模型已保存");
   } catch (e) {
-    $("#qaHint").textContent = "模型保存失败：" + e;
+    qaStatus("模型保存失败：" + e, true);
   }
 }
 $("#qaModelSel").addEventListener("change", () => {
@@ -468,7 +534,7 @@ loadQaModel();
 async function qaSummary() {
   if (qaBusy) return;
   if (!INFO || !INFO.loaded) {
-    $("#qaHint").textContent = "请先打开文档";
+    qaStatus("请先打开文档");
     return;
   }
   if (!document.body.classList.contains("qa")) toggleQA();

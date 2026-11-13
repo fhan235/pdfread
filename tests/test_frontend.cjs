@@ -19,6 +19,7 @@ function setup() {
       value: '', innerHTML: '', textContent: '', disabled: false, style: {},
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
       addEventListener() {}, querySelectorAll() { return []; }, appendChild() {},
+      querySelector() { return null; }, remove() {},
     });
     return elements.get(id);
   };
@@ -97,9 +98,40 @@ test('qa sessions keep their histories separate', () => {
   run(`qaSwitchSession(${run('qaSessions[0].id')})`);
   assert.equal(run('qaHist[0].content'), '第一个问题');
   assert.equal(run('tabs[0].qaSessions.length'), 2);   // 会话组随标签快照保存
-  run('document.querySelector("#qaDel").onclick()');
+  // 关闭当前对话(标签上的 ×)后切到相邻一个
+  run(`qaDelSession(${run('qaSessions[0].id')})`);
   assert.equal(run('qaSessions.length'), 1);
   assert.equal(run('qaHist[0].content'), '第二个问题');
+});
+
+test('qa tab bar renders one tab per session with close buttons', () => {
+  const { context, element, run } = setup();
+  context.confirm = () => true;
+  run('tabs = [{id:"d1"}]; activeTab = "d1"; qaLoadTab(tabs[0]);');
+  run('qaHist.push({role:"user",content:"向量检索是怎么做的"})');
+  run('qaNewSession()');
+  run('renderQaSessions()');
+  const html = element('#qaTabs').innerHTML;
+  assert.equal((html.match(/class="qtab/g) || []).length, 2);
+  assert.match(html, /向量检索/);          // 标题取首条提问
+  assert.match(html, /新对话/);            // 没提问过的显示占位名
+  assert.match(html, /data-del=/);         // 每个标签自带关闭入口
+  assert.match(html, /qtab on/);           // 当前会话高亮
+  // 关闭非当前对话不该影响当前选中的会话
+  const second = run('qaSid');
+  run(`qaDelSession(${run('qaSessions[0].id')})`);
+  assert.equal(run('qaSid'), second);
+  assert.equal(run('qaSessions.length'), 1);
+});
+
+test('qa tab titles are escaped', () => {
+  const { element, run } = setup();
+  run('tabs = [{id:"d1"}]; activeTab = "d1"; qaLoadTab(tabs[0]);');
+  run('qaHist.push({role:"user",content:"<img src=x onerror=alert(1)>"})');
+  run('renderQaSessions()');
+  const html = element('#qaTabs').innerHTML;
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
 });
 
 // KaTeX 的 MathML 里有一份 <annotation> 保留原始 LaTeX(用于朗读与复制),
