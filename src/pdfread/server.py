@@ -523,6 +523,43 @@ def library_progress(payload: dict) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/qa/sessions")
+def qa_sessions_list(lib: int = 0) -> dict:
+    """取某文库文档的全部问答对话。
+
+    lib 为 0(文档未入库, 如临时打开的文件)时返回空列表, 前端照常新建
+    内存会话 —— 问答不该因为没入库就不能用。
+    """
+    if lib <= 0:
+        return {"sessions": []}
+    return {"sessions": _library().list_qa_sessions(lib)}
+
+
+@app.post("/api/qa/sessions")
+def qa_session_save(payload: dict) -> dict:
+    """新建或更新一个对话。返回会话 id(新建时是新分配的)。"""
+    lib = int(payload.get("lib", 0) or 0)
+    if lib <= 0:
+        raise HTTPException(400, "该文档尚未入库，无法保存对话")
+    sid = payload.get("id")
+    sid = int(sid) if sid else None
+    hist = payload.get("hist")
+    if not isinstance(hist, list):
+        raise HTTPException(400, "hist 必须是数组")
+    title = str(payload.get("title", ""))[:120]
+    return {"id": _library().save_qa_session(lib, sid, hist, title)}
+
+
+@app.post("/api/qa/sessions/delete")
+def qa_session_delete(payload: dict) -> dict:
+    lib = int(payload.get("lib", 0) or 0)
+    sid = int(payload.get("id", 0) or 0)
+    if lib <= 0 or sid <= 0:
+        raise HTTPException(400, "参数不完整")
+    _library().delete_qa_session(lib, sid)
+    return {"ok": True}
+
+
 @app.post("/api/library/open")
 async def library_open(payload: dict) -> dict:
     """从文库打开文档。文库条目本身是用户授权的白名单,
@@ -1286,226 +1323,29 @@ async def raw_pdf(doc: str = "") -> FileResponse:
 
 
 # ---------- 版本更新 ----------
+# Release 查询/下载校验的纯逻辑在 release.py; 这里保留路由, 以及
+# 带运行时状态的部分(检查结果缓存、下载串行锁、进度上报)。
+from .release import (_ASSET_RE, _UPDATE_MAX, _UPDATE_REPO, _UPDATE_SUMS,
+                      _UPDATE_TTL, _VER_RE, _asset_name, _pick_asset,
+                      _update_client, _update_proxy, _update_ssl_context,
+                      _ver_tuple, fetch_latest)
 
-_UPDATE_REPO = "fhan235/pdfread"
-_UPDATE_TTL = 6 * 3600          # 检查结果缓存 6 小时
-_UPDATE_MAX = 500 * 1024 * 1024  # 安装包上限 500MB
-_UPDATE_SUMS = "SHA256SUMS.txt"  # Release 附带的校验文件(CI 生成)
-_VER_RE = re.compile(r"[0-9][0-9A-Za-z.\-]{0,40}")
-_ASSET_RE = re.compile(r"pdfread-[A-Za-z0-9.\-]+\.(?:zip|dmg|tar\.gz)")
 _update_cache: dict = {"ts": 0.0, "data": None}
 _download_lock = asyncio.Lock()   # 「仅下载」与「一键更新」写同一文件, 串行化
 
 
-def _ver_tuple(v: str) -> tuple:
-    try:
-        return tuple(int(x) for x in re.findall(r"\d+", v)[:4])
-    except ValueError:
-        return (0,)
-
-
-def _asset_name() -> str:
-    """当前平台对应的安装包文件名。"""
-    return ("pdfread-windows-x64.zip" if sys.platform == "win32"
-            else "pdfread-macos-arm64.dmg" if sys.platform == "darwin"
-            else "pdfread-linux-x64.tar.gz")
-
-
-def _pick_asset(assets: list) -> dict | None:
-    """按当前平台挑选安装包。"""
-    want = _asset_name()
-    for a in assets:
-        if isinstance(a, dict) and str(a.get("name", "")).endswith(want):
-            return a
-    return None
-
-
-async def _fallback_latest(client) -> dict | None:
-    """API 限流时的回退: 经 releases/latest 的 302 跳转拿最新版本号。
-
-    该端点属于网页端, 不占 API 配额。拿不到 Release 说明,
-    安装包地址按命名规律拼接。
-    """
-    try:
-        r = await client.get(
-            f"https://github.com/{_UPDATE_REPO}/releases/latest",
-            follow_redirects=False)
-    except Exception:
-        return None
-    m = re.search(r"/tag/v?([0-9][0-9A-Za-z.\-]*)\s*$",
-                  r.headers.get("location", ""))
-    if not m:
-        return None
-    latest = m.group(1)
-    name = _asset_name()
-    return {
-        "latest": latest,
-        "notes": "",
-        "page_url": f"https://github.com/{_UPDATE_REPO}/releases/tag/v{latest}",
-        "asset_name": name,
-        "asset_url": f"https://github.com/{_UPDATE_REPO}/releases/download"
-                     f"/v{latest}/{name}",
-    }
-
-
-def _update_proxy() -> str | None:
-    """更新检查/下载使用的代理。
-
-    优先级: PDFREAD_PROXY 环境变量 > 设置中手动保存的代理 >
-    HTTPS_PROXY 等环境变量 > 系统代理(Windows 注册表 / macOS scutil)。
-
-    注意: PAC 自动配置脚本(AutoConfigURL)无法在此解析, 该场景请手动填写代理。
-    """
-    v = os.environ.get("PDFREAD_PROXY", "").strip()
-    if v:
-        return v
-    from .settings import get_proxy
-    saved = get_proxy()
-    if saved:
-        return saved
-    for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
-              "HTTP_PROXY", "http_proxy"):
-        v = os.environ.get(k, "").strip()
-        if v:
-            return v
-    if sys.platform == "win32":
-        try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
-            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
-            server_, _ = winreg.QueryValueEx(key, "ProxyServer")
-            winreg.CloseKey(key)
-            if enabled and server_:
-                # 可能是 "http=h:1;https=h:2" 或统一 "h:port"
-                for part in str(server_).split(";"):
-                    part = part.strip()
-                    if part.startswith("https="):
-                        return "http://" + part[6:]
-                first = str(server_).split(";")[0].strip()
-                if "=" in first:
-                    first = first.split("=", 1)[1]
-                if first:
-                    return "http://" + first
-        except Exception:
-            pass
-    elif sys.platform == "darwin":
-        try:
-            import subprocess
-            out = subprocess.run(["scutil", "--proxy"], capture_output=True,
-                                 text=True, timeout=3).stdout
-            en = re.search(r"HTTPSEnable\s*:\s*1", out)
-            host = re.search(r"HTTPSProxy\s*:\s*(\S+)", out)
-            port = re.search(r"HTTPSPort\s*:\s*(\d+)", out)
-            if en and host:
-                return f"http://{host.group(1)}:{(port and port.group(1)) or '443'}"
-        except Exception:
-            pass
-    return None
-
-
-def _update_ssl_context():
-    """优先使用操作系统证书库。
-
-    企业代理常做 TLS 审查(根证书装进了系统库), 而 Python 默认用 certifi
-    自带证书, 校验必失败。Windows 读注册表根证书, macOS 读系统钥匙串。
-    """
-    import ssl
-    ctx = ssl.create_default_context()
-    try:
-        if sys.platform == "win32":
-            for store in ("ROOT", "CA"):
-                for cert in ssl.enum_certificates(store):
-                    try:
-                        ctx.load_verify_locations(cadata=cert[0])
-                    except Exception:
-                        continue
-        elif sys.platform == "darwin":
-            import subprocess
-            out = subprocess.run(
-                ["security", "find-certificate", "-a", "-p",
-                 "/System/Library/Keychains/SystemRootCertificates.keychain"],
-                capture_output=True, text=True, timeout=5).stdout
-            if out:
-                ctx.load_verify_locations(cadata=out)
-    except Exception:
-        pass
-    return ctx
-
-
-def _update_client(timeout: float = 8.0, **extra):
-    import httpx
-    proxy = _update_proxy()
-    kwargs = {"timeout": timeout, "verify": _update_ssl_context(), **extra}
-    if proxy:
-        kwargs["proxy"] = proxy
-    return httpx.AsyncClient(**kwargs)
-
-
 async def _latest_release(force: bool = False) -> dict:
-    """查询 GitHub 最新 Release, 结果缓存 6 小时, 离线时静默返回旧值。
+    """取最新 Release 信息, 结果缓存 6 小时, 离线时静默返回旧值。
 
-    网页端(releases/latest 302 跳转)优先: 不占未认证 API 的限流配额;
-    网页端失败时仍尝试 API(两条通道互为备份); 两通道版本号一致才合并。
+    缓存留在本模块而不是 release.py: 它是运行时状态, 和路由放在一起,
+    测试也能通过 patch server._update_cache 直接控制。
     """
     if not force and _update_cache["data"] and \
             time.time() - _update_cache["ts"] < _UPDATE_TTL:
         return _update_cache["data"]
-    from . import __version__
-    data = {"current": __version__, "newer": False, "error": ""}
-    try:
-        async with _update_client(timeout=8.0) as client:
-            fb = await _fallback_latest(client)
-            if not fb:
-                # 网页端失败, 退到 API(可能 API 通而网页端不通)
-                fb = await _api_latest(client)
-            elif fb:
-                # 网页端成功时, 尽力用 API 富化(更新说明/精确资产),
-                # 但两通道版本号必须一致才合并, 防止版本与下载地址混搭
-                api = await _api_latest(client)
-                if api and api["latest"] == fb["latest"]:
-                    fb["notes"] = api["notes"]
-                    if api["asset_url"]:
-                        fb["asset_name"] = api["asset_name"]
-                        fb["asset_url"] = api["asset_url"]
-                    fb["fallback"] = False
-            if not fb:
-                data["error"] = ("无法访问 GitHub，请检查网络/代理"
-                                 "（强制代理环境可在设置 → 关于中手动填写代理地址）")
-            else:
-                data.update(fb)
-                data["newer"] = _ver_tuple(fb["latest"]) > _ver_tuple(__version__)
-                data["fallback"] = fb.get("fallback", False)
-    except Exception as exc:
-        data["error"] = (f"网络请求失败: {str(exc)[:150]}"
-                         "（强制代理环境可在设置 → 关于中手动填写代理地址）")
+    data = await fetch_latest()
     _update_cache.update(ts=time.time(), data=data)
     return data
-
-
-async def _api_latest(client) -> dict | None:
-    """经 GitHub API 查询最新 Release(更新说明 + 精确资产)。"""
-    try:
-        r = await client.get(
-            f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
-            headers={"User-Agent": "pdfread-updater",
-                     "Accept": "application/vnd.github+json"})
-    except Exception:
-        return None
-    if r.status_code != 200:
-        return None
-    rel = r.json()
-    latest = str(rel.get("tag_name", "")).lstrip("v")
-    asset = _pick_asset(rel.get("assets") or [])
-    return {
-        "latest": latest,
-        "notes": str(rel.get("body", ""))[:4000],
-        "page_url": str(rel.get("html_url", "")),
-        "asset_name": asset and asset.get("name") or "",
-        "asset_url": asset and asset.get("browser_download_url") or "",
-        "fallback": False,
-    }
 
 
 def _consume_update_result() -> dict | None:

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdfread import server, updater
+from pdfread import release, server, updater
 
 
 # ---------- 版本检查 ----------
@@ -48,7 +48,7 @@ class _FakeClient:
 @pytest.mark.anyio
 async def test_fallback_latest_from_redirect(monkeypatch):
     monkeypatch.setattr(server.sys, "platform", "win32")
-    fb = await server._fallback_latest(_FakeClient())
+    fb = await release._fallback_latest(_FakeClient())
     assert fb["latest"] == "0.9.9"
     assert fb["asset_url"].endswith("/releases/download/v0.9.9/pdfread-windows-x64.zip")
 
@@ -58,7 +58,7 @@ async def test_fallback_latest_bad_location(monkeypatch):
     class Bad:
         async def get(self, url, **kw):
             return _FakeResp("https://github.com/login")
-    assert await server._fallback_latest(Bad()) is None
+    assert await release._fallback_latest(Bad()) is None
 
 
 def test_update_check_reports_apply_block_in_source_mode(client, monkeypatch):

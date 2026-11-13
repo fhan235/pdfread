@@ -60,14 +60,20 @@ dragResize($("#splitQaIn"), (e) => {
 });
 
 /* ---------------- AI 问答 ---------------- */
-/* 每个标签页各自保存一组对话会话(多窗口), qaHist 始终指向当前会话的历史数组;
-   问答不走缓存, 每次都发送全文。同一时刻只允许一个请求在跑(qaBusy) */
-let qaSessions = [];   // [{id, hist:[{role,content}]}]
+/* 对话按文库文档 id 持久化在 library.db(表 qa_sessions), 刷新页面、重开
+   应用都还在; 标签快照只作为同会话内切换时的内存缓存。
+   qaHist 始终指向当前会话的历史数组(同一数组对象, 不可重新赋值成副本)。
+   问答不走缓存, 每次都发送全文。同一时刻只允许一个请求在跑(qaBusy)。
+
+   未入库的文档(INFO.lib 为空, 如临时打开的文件)退化为纯内存会话:
+   问答照常可用, 只是刷新后不保留。 */
+let qaSessions = [];   // [{id, hist:[{role,content}], saved:bool}]
 let qaSid = 0;         // 当前会话 id
-let qaSeq = 0;         // 会话 id 自增
-let qaHist = [];       // === 当前会话的 hist (同一数组对象, 不可重新赋值成副本)
+let qaSeq = 0;         // 本地新建会话的临时 id(负数, 与服务端 id 区分)
+let qaHist = [];       // === 当前会话的 hist
 let qaBusy = false;
-let qaBusySid = 0;     // 正在等待回答的会话, 用于在列表里标记 ●
+let qaBusySid = 0;     // 正在等待回答的会话, 用于在标签上标记 ●
+let qaLoadedLib = null;   // 已加载会话的文库 id, 避免重复拉取
 
 /* 会话标题: 取首条用户提问, 没有则「新对话」。
    maxLen 小一些: 标签很窄, 过长的标题只会被省略号截掉 */
@@ -78,24 +84,72 @@ function qaSessTitle(s, maxLen) {
   return t ? (t.length > n ? t.slice(0, n) + "…" : t) : "新对话";
 }
 
-/* 新建会话并切到它; 返回新会话 */
+/* 新建会话并切到它; 返回新会话。
+   本地 id 用递减负数, 首次保存后换成服务端返回的正 id */
 function qaNewSession() {
-  const s = { id: ++qaSeq, hist: [] };
+  const s = { id: --qaSeq, hist: [] };
   qaSessions.push(s);
   qaSid = s.id;
   qaHist = s.hist;
   return s;
 }
 
-/* 从标签快照恢复会话组; 兼容旧快照里的单条 qaHist */
-function qaLoadTab(t) {
-  qaSessions = (t && t.qaSessions) || [];
-  if (!qaSessions.length) {
-    qaSessions = [{ id: ++qaSeq, hist: (t && t.qaHist) || [] }];
+/* 把当前会话写回服务端(节流: 回答结束/删除时才调, 不是每个字都存) */
+async function qaPersist(session) {
+  const lib = INFO && INFO.lib;
+  if (!lib || !session) return;
+  try {
+    const r = await libPost("/api/qa/sessions", {
+      lib, id: session.id > 0 ? session.id : null,
+      hist: session.hist, title: qaSessTitle(session, 40),
+    });
+    if (!r.ok) return;
+    const d = await r.json();
+    // 新建的会话拿到服务端 id 后要换过来, 否则下次会重复插入
+    if (d.id && session.id !== d.id) {
+      const wasCurrent = qaSid === session.id;
+      session.id = d.id;
+      if (wasCurrent) qaSid = d.id;
+      renderQaSessions();
+    }
+  } catch (e) { /* 存不上不影响当前对话 */ }
+}
+
+/* 进入文档时加载该文档的历史对话; 没有则开一个空会话 */
+async function qaLoadDoc() {
+  const lib = (INFO && INFO.lib) || 0;
+  qaLoadedLib = lib;
+  qaSessions = [];
+  qaSeq = 0;
+  if (lib) {
+    try {
+      const d = await (await fetch("/api/qa/sessions?lib=" + lib)).json();
+      qaSessions = (d.sessions || []).map((s) => ({ id: s.id, hist: s.hist || [] }));
+    } catch (e) { /* 读不到就当没有历史 */ }
   }
-  const s = qaSessions.find((x) => x.id === (t && t.qaSid)) || qaSessions[0];
-  qaSid = s.id;
-  qaHist = s.hist;
+  if (!qaSessions.length) qaNewSession();
+  const cur = qaSessions[qaSessions.length - 1];
+  qaSid = cur.id;
+  qaHist = cur.hist;
+  renderQA();
+}
+
+/* 标签内缓存: 切标签时不必重新请求 */
+function qaLoadTab(t) {
+  const lib = (INFO && INFO.lib) || 0;
+  if (t && t.qaSessions && t.qaLib === lib) {
+    qaSessions = t.qaSessions;
+    const s = qaSessions.find((x) => x.id === t.qaSid) || qaSessions[0];
+    qaSid = s.id;
+    qaHist = s.hist;
+    qaLoadedLib = lib;
+    return;
+  }
+  // 没有缓存(新开/刷新): 异步从服务端拉, 先给个空会话占位
+  qaSessions = [];
+  qaSeq = 0;
+  qaNewSession();
+  qaLoadDoc();
 }
 
 /* 写回标签快照 */
@@ -103,6 +157,7 @@ function qaSaveTab(t) {
   if (!t) return;
   t.qaSessions = qaSessions;
   t.qaSid = qaSid;
+  t.qaLib = (INFO && INFO.lib) || 0;
 }
 
 /* 渲染对话标签栏(横向, 像浏览器标签): 当前高亮, 等待回答的显示 ●,
@@ -372,9 +427,13 @@ function qaDelSession(id) {
   const s = qaSessions.find((x) => x.id === Number(id));
   if (!s) return;
   if ((s.hist || []).length
-      && !confirm(`关闭对话「${qaSessTitle(s)}」？\n该对话的问答记录会丢失。`)) return;
+      && !confirm(`关闭对话「${qaSessTitle(s)}」？\n该对话的问答记录会删除且不可恢复。`)) return;
   const i = qaSessions.indexOf(s);
   qaSessions.splice(i, 1);
+  // 已落库的会话要同步删掉, 否则刷新后又回来了
+  if (s.id > 0 && INFO && INFO.lib) {
+    libPost("/api/qa/sessions/delete", { lib: INFO.lib, id: s.id }).catch(() => {});
+  }
   if (!qaSessions.length) qaNewSession();
   else if (s.id === qaSid) {
     const next = qaSessions[Math.min(i, qaSessions.length - 1)];
@@ -464,6 +523,8 @@ async function qaSend() {
     }
     if (!answer) throw new Error("空回答");
     myHist.push({ role: "assistant", content: answer });
+    // 一问一答完整了才落库: 不必每个字都写
+    qaPersist(mySess.find((x) => x.hist === myHist));
   } catch (err) {
     myHist.pop();   // 失败的问题不留在发起方的历史里
     if (live()) {
@@ -556,6 +617,7 @@ async function qaSummary() {
     if (live()) thinking.innerHTML = mdRender(d.answer);
     myHist.push({ role: "user", content: "生成速读摘要" },
                 { role: "assistant", content: d.answer });
+    qaPersist(mySess.find((x) => x.hist === myHist));
   } catch (err) {
     if (live()) {
       thinking.textContent = "出错了：" + err;

@@ -440,5 +440,9 @@
 <script src="/static/js/panels.js"></script>
 <script src="/static/js/ui.js"></script>
 <script src="/static/js/prefs.js"></script>
+<!-- 版本更新: 依赖 prefs 的 prefs/savePrefs, 故排在其后 -->
+<script src="/static/js/update.js"></script>
+<!-- 启动序列必须是最后一个: 它要调用前面所有模块 -->
+<script src="/static/js/boot.js"></script>
 </body>
 </html>

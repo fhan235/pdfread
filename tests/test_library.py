@@ -484,3 +484,78 @@ def test_thumbnail_skips_non_pdf_and_missing_files(client, tmp_path):
 
     assert client.get(f"/api/thumb/{txt_id}.png").status_code == 404
     assert client.get(f"/api/thumb/{gone_id}.png").status_code == 404
+
+def test_qa_sessions_persist_and_clip(tmp_path):
+    """问答会话落库: 按文档隔离、超限裁剪、脏数据过滤。"""
+    from pdfread.library import Library
+
+    lib = Library(str(tmp_path / "library.db"))
+    a = lib.upsert_document("/tmp/a.pdf", "a.pdf")
+    b = lib.upsert_document("/tmp/b.pdf", "b.pdf")
+
+    sid = lib.save_qa_session(a, None, [{"role": "user", "content": "问题"}], "问题")
+    assert sid > 0
+    # 同一会话再存是更新而不是新增
+    lib.save_qa_session(a, sid, [{"role": "user", "content": "问题"},
+                                 {"role": "assistant", "content": "回答"}], "问题")
+    rows = lib.list_qa_sessions(a)
+    assert len(rows) == 1 and len(rows[0]["hist"]) == 2
+
+    # 按文档隔离
+    assert lib.list_qa_sessions(b) == []
+
+    # 只认 user/assistant, 其余角色(如 system)丢弃
+    lib.save_qa_session(b, None, [{"role": "system", "content": "注入"},
+                                  {"role": "user", "content": "正常"}], "x")
+    assert [m["role"] for m in lib.list_qa_sessions(b)[0]["hist"]] == ["user"]
+
+    # 单条消息超长截断
+    lib.save_qa_session(b, None, [{"role": "user", "content": "x" * 50000}], "long")
+    assert len(lib.list_qa_sessions(b)[-1]["hist"][0]["content"]) == lib.MAX_QA_CHARS
+
+    lib.delete_qa_session(a, sid)
+    assert lib.list_qa_sessions(a) == []
+    lib.close()
+
+
+def test_qa_sessions_cap_and_cascade(tmp_path):
+    """会话数超上限丢最旧的; 文档移除时会话随外键级联删除。"""
+    from pdfread.library import Library
+
+    lib = Library(str(tmp_path / "library.db"))
+    doc = lib.upsert_document("/tmp/c.pdf", "c.pdf")
+    for i in range(lib.MAX_QA_SESSIONS + 5):
+        lib.save_qa_session(doc, None, [{"role": "user", "content": f"q{i}"}], f"q{i}")
+    rows = lib.list_qa_sessions(doc)
+    assert len(rows) == lib.MAX_QA_SESSIONS
+    assert rows[-1]["hist"][0]["content"] == f"q{lib.MAX_QA_SESSIONS + 4}"   # 留的是最新的
+
+    lib.remove_document(doc)
+    assert lib.list_qa_sessions(doc) == []
+    lib.close()
+
+
+def test_qa_session_endpoints(client, make_pdf):
+    """API 层: 未入库的文档只读不写, 入库后可增删查。"""
+    src = make_pdf("qa.pdf")
+    opened = client.post(f"/api/open?path={src}")
+    lib_id = opened.json()["lib"]
+
+    # 未入库(lib=0): 读返回空, 写被拒绝 —— 问答本身仍可用, 只是不持久化
+    assert client.get("/api/qa/sessions?lib=0").json() == {"sessions": []}
+    assert client.post("/api/qa/sessions", json={"lib": 0, "hist": []}).status_code == 400
+    # hist 必须是数组
+    assert client.post("/api/qa/sessions",
+                       json={"lib": lib_id, "hist": "oops"}).status_code == 400
+
+    r = client.post("/api/qa/sessions", json={
+        "lib": lib_id, "hist": [{"role": "user", "content": "问"}], "title": "问"})
+    assert r.status_code == 200
+    sid = r.json()["id"]
+
+    got = client.get(f"/api/qa/sessions?lib={lib_id}").json()["sessions"]
+    assert len(got) == 1 and got[0]["id"] == sid
+
+    assert client.post("/api/qa/sessions/delete",
+                       json={"lib": lib_id, "id": sid}).status_code == 200
+    assert client.get(f"/api/qa/sessions?lib={lib_id}").json()["sessions"] == []

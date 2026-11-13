@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS document_tags (
     tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (document_id, tag_id)
 );
+CREATE TABLE IF NOT EXISTS qa_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL,
+    updated REAL NOT NULL,
+    hist TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_qa_doc ON qa_sessions(document_id, id);
 CREATE TABLE IF NOT EXISTS highlights (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -351,3 +360,83 @@ class Library:
                     "exists": Path(r[1]).is_file(),
                 })
         return {"folders": folders, "tags": tags, "documents": docs}
+
+    # ---------- AI 问答会话 ----------
+    # 会话按文库文档 id 绑定并持久化, 刷新页面/重开应用都还在;
+    # 文档从库中移除时随外键级联删除。
+
+    MAX_QA_SESSIONS = 20        # 每个文档保留的对话数上限
+    MAX_QA_MESSAGES = 200       # 单个对话保留的消息条数上限
+    MAX_QA_CHARS = 20000        # 单条消息的字符上限
+
+    def _clip_hist(self, hist: list) -> list:
+        """裁剪历史到安全体积: 只认 user/assistant, 超长截断, 过多丢旧的。"""
+        out = []
+        for m in hist if isinstance(hist, list) else []:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            out.append({"role": role, "content": content[:self.MAX_QA_CHARS]})
+        return out[-self.MAX_QA_MESSAGES:]
+
+    def list_qa_sessions(self, doc_id: int) -> list[dict]:
+        """取某文档的全部对话(按创建顺序)。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, title, created, updated, hist FROM qa_sessions"
+                " WHERE document_id = ? ORDER BY id", (doc_id,)
+            ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                hist = json.loads(r[4])
+            except Exception:
+                hist = []
+            out.append({"id": r[0], "title": r[1], "created": r[2],
+                        "updated": r[3], "hist": self._clip_hist(hist)})
+        return out
+
+    def save_qa_session(self, doc_id: int, session_id: int | None,
+                        hist: list, title: str = "") -> int:
+        """新建或更新一个对话, 返回会话 id。
+
+        session_id 为空表示新建; 新建时若已超过上限, 删掉最旧的那些。
+        """
+        hist = self._clip_hist(hist)
+        payload = json.dumps(hist, ensure_ascii=False)
+        now = time.time()
+        with self._lock:
+            if session_id:
+                cur = self._conn.execute(
+                    "UPDATE qa_sessions SET hist = ?, title = ?, updated = ?"
+                    " WHERE id = ? AND document_id = ?",
+                    (payload, title[:120], now, session_id, doc_id),
+                )
+                if cur.rowcount:
+                    self._conn.commit()
+                    return session_id
+                # 该会话已被删除(或不属于此文档): 落回新建, 不静默丢数据
+            cur = self._conn.execute(
+                "INSERT INTO qa_sessions (document_id, title, created, updated,"
+                " hist) VALUES (?, ?, ?, ?, ?)",
+                (doc_id, title[:120], now, now, payload),
+            )
+            new_id = cur.lastrowid
+            self._conn.execute(
+                "DELETE FROM qa_sessions WHERE document_id = ? AND id NOT IN ("
+                " SELECT id FROM qa_sessions WHERE document_id = ?"
+                " ORDER BY id DESC LIMIT ?)",
+                (doc_id, doc_id, self.MAX_QA_SESSIONS),
+            )
+            self._conn.commit()
+            return new_id
+
+    def delete_qa_session(self, doc_id: int, session_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM qa_sessions WHERE id = ? AND document_id = ?",
+                (session_id, doc_id))
+            self._conn.commit()

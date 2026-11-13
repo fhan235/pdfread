@@ -25,8 +25,9 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 
 | 文件 | 职责 | 关键位置 |
 |---|---|---|
-| `server.py` | 全部 HTTP 路由 + 运行时 STATE | 路由见下表；`configure()`；`_register()` 打开文档登记（含文库 upsert、打开历史）；`_qa_cfg()` 问答模型覆盖；`_close_pool()` 退出时强制回收进程池；`enable_page_watchdog()` 关页退出看门狗 |
-| `extract.py` | PDF 文本提取 + 段落重建（行级聚类、分栏） | `Para` 数据类；`extract_pages()` |
+| `server.py` | HTTP 路由 + 运行时 STATE（Release 查询逻辑已拆到 `release.py`） | 路由见下表；`configure()`；`_register()` 打开文档登记（含文库 upsert、打开历史）；`_qa_cfg()` 问答模型覆盖；`_close_pool()` 退出时强制回收进程池；`enable_page_watchdog()` 关页退出看门狗 |
+| `extract.py` | PDF 文本提取 + 段落重建（行级聚类、分栏） | `Para` 数据类；`extract_pages()`；段落合并骨架见 `linemerge.py` |
+| `linemerge.py` | 段落重建的**共享骨架**（被 extract 与 paper 共用） | `merge_lines()`（主入口，差异经 `split_before`/`clean` 注入）；`continues()`（五条续行判据）；`column_bounds()`/`normal_gap()`/`join_lines()` |
 | `paper.py` | 论文模式：图表区域识别（figtext）、跨图表段落续接、公式占位（⟦F1⟧）、表格/参考文献过滤 | `looks_like_paper()` / `extract_paper()`；`mask_formulas()` / `unmask_formulas()` |
 | `pdfworker.py` | 进程池内执行：解析（带 stamp 防文件中途变更）、渲染 PNG/SVG、词坐标、文内链接 | `inspect_pdf` / `render_page_svg` / `page_words` / `page_links` |
 | `translate.py` | LLM 调用：翻译/润色/问答/摘要 + SQLite 缓存 | `PROVIDERS`（含 `models` 候选列表）；`Translator`（`_chat` 是统一调用点，429/5xx 重试 3 次） |
@@ -37,6 +38,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 | `txt.py` | TXT 原生解析（编码检测、章节识别、按字符切块） | `inspect_txt` |
 | `urlfetch.py` | URL 打开（SSRF 校验、headless 网页转 PDF） | `normalize_url` / `validate_url` / `resolve_checked`（返回已验证 IP 供连接钉扎）/ `fetch_document` |
 | `browser.py` | 系统浏览器探测 + headless 网页转 PDF | `find_browser()` / `html_to_pdf()`（`--host-resolver-rules` 钉 IP 防 SSRF） |
+| `release.py` | GitHub Release 查询与资产匹配（**无路由、无可变状态**；检查结果缓存留在 `server.py` 以便测试 patch） | `fetch_latest()`；`_pick_asset()`/`_update_proxy()`/`_update_ssl_context()` |
 | `updater.py` | 一键更新的暂存与安装（主进程侧 + 安装器侧） | `prepare()`/`spawn()`（主进程）；`install()`（安装器入口）；`replace()` 只换包内条目可回滚；`pid_alive()`（跨平台，Windows 用 OpenProcess） |
 | `_macos.py` | macOS Dock 图标处理 | `hide_dock_icon()` / `hide_dock_icon_if_multiprocessing_child()` |
 
@@ -46,6 +48,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/{n}`(包内图片, SVG 加 CSP sandbox) L796
 文档管理：`GET /api/docs` · `POST /api/docs/close` · `GET /api/info` · `POST /api/open`(支持 `force=1` 跳过查重) · `POST /api/upload`(同) · `POST /api/open-url`(body 里 `force`) · `GET /api/browse` · `POST /api/roots`(加白名单) · `GET /api/progress`(打开任务进度轮询) · `GET /api/history` · `POST /api/history/remove`
 > 三个打开入口命中内容查重时返回 **409** `{duplicate, sha256, existing}`，不是错误而是等用户决策。
+问答会话：`GET /api/qa/sessions?lib=` · `POST /api/qa/sessions`（新建/更新，返回 id）· `POST /api/qa/sessions/delete`
 文库：`GET /api/library` L425 · folders L430-451 · documents move/tags/remove L454-481 · `POST /api/library/open` L495 · `POST /api/library/progress` L484
 划线：`GET /api/words/{n}` L527 · `GET/POST /api/highlights` · `POST /api/highlights/delete`
 文内链接：`GET /api/links/{n}`(本页指向文档内其他位置的链接, 仅 PDF) L545
@@ -58,7 +61,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 数据 | 位置 | 结构 |
 |---|---|---|
 | 翻译/润色/摘要缓存 | `cache_dir()/translations.db` | 表 `t(k hash, v 文本)`，key 含 base_url+模型+提示词版本 |
-| 文库/高亮 | `config_dir()/library.db` | 表 `folders` `documents`(含 progress/pages/sha256 列, 旧库自动 ALTER 迁移; sha256 建索引供查重) `tags` `document_tags` `highlights`（外键级联；高亮 rects 为 JSON 的 PDF 点坐标） |
+| 文库/高亮/问答 | `config_dir()/library.db` | 表 `folders` `documents`(含 progress/pages/sha256 列, 旧库自动 ALTER 迁移; sha256 建索引供查重) `tags` `document_tags` `highlights` `qa_sessions`（问答对话，hist 存 JSON；全部外键级联，移除文档即清空其划线与对话） |
 | 设置/密钥 | `config_dir()/config.json`（0600） | 环境变量优先于配置文件；另含 `profiles`（按服务 model/base_url/qa_model）、`parse`（论文模式选项）、`history`（最近打开, 上限 20）、`proxy`（更新代理） |
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
 | 运行实例 | `cache_dir()/runtime.json` | `{pid, port}`，桌面版单实例探测 |
@@ -68,7 +71,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 
 ## 前端地图（static/，无构建，多文件）
 
-`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 10 个**经典脚本**，
+`index.html` 只有页面结构；`style.css` 是全部样式；JS 按功能拆成 12 个**经典脚本**，
 加载顺序即依赖顺序（`index.html` 底部的 script 标签顺序）。
 唯一的第三方前端依赖是 KaTeX，自托管在 `static/vendor/katex/`（在 `mathtex.js` 之前加载）。
 跨文件共享全局作用域：顶层 `function` 声明挂在 window 上，`const/let` 在全局词法环境，
@@ -89,7 +92,9 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/mathtex.js` | 数学公式渲染：薄封装 KaTeX（本地自托管，离线可用） | `texRender(src, display)` 是唯一出口；`TEX_MACROS`（补 LLM 常用而 KaTeX 没有的命令）；`texNormalize()` 剥掉 `\begin{equation}`/`\label{}` 等 KaTeX 不认的文档级语法；KaTeX 本体在 `static/vendor/katex/` |
 | `js/panels.js` | 分割条拖拽（含问答输入框高度）+ AI 问答（多对话会话、流式、独立模型选择）+ 速读摘要 | `applySplit()`/`dragResize()`；`qaSessions`/`qaHist`（指向当前会话）/`qaNewSession`/`qaSwitchSession`/`qaDelSession`/`qaLoadTab`/`qaSaveTab`；`renderQaSessions()`（横向标签栏，事件委托在 `#qaTabs`，支持中键关闭）/`qaStatus()`（临时提示）/`qaEmptyHint()`（空状态）；`mdRender()`（**先把公式/行内代码换占位符再做粗斜体**，所以 `**$x$：说明**` 这种跨公式的加粗能配对；表格/代码块/引用/分割线，容忍行间空行与未闭合块）/`qaSend()`/`qaSummary()`；`loadQaModel` |
 | `js/ui.js` | 顶栏交互、文件选择/上传/URL/最近打开/白名单目录 | `openFile`/`uploadFile`/`openUrl`（XHR 进度 + `/api/progress` 轮询）；`loadHistory`/`addRoot`；`setBusy*` + `#busy` 右下角浮动进度卡片 |
-| `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放、版本更新、启动 | `prefs`/`applyPrefs()`；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮；`checkUpdate()` + 更新弹窗；尾部是启动序列 |
+| `js/prefs.js` | 阅读偏好、导出、设置面板、论文模式、自定义主题、PDF 缩放 | `prefs`/`applyPrefs()`/`migratePrefs()`（旧偏好键迁移）；`doExport()`；`applyCustomTheme`/`buildThemeGrid`；`setZoom` + Ctrl/⌘+滚轮 |
+| `js/update.js` | 版本更新：静默检查、更新弹窗、仅下载、一键更新（带进度） | `UPDATE`/`checkUpdate()`/`openUpdateDialog()`；安装流程本身在后端 `updater.py` |
+| `js/boot.js` | 启动序列（**必须是最后一个脚本**） | 恢复偏好 → `applyPrefs()` → 绑定分段控件 → `checkUpdate()` → `init()` |
 
 **关键全局**：`INFO`（当前文档元信息，含 `doc` 运行时 id、`lib` 文库 id、`sizes` 页面尺寸 pt）。
 样式按注释区块组织（主题变量/顶栏/标题栏/标签栏/布局/译文/文库/问答/划线等），改样式先搜区块名。
@@ -106,7 +111,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
 - **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, `summary_model`) 缓存。
 - **数学输出格式**：`QA_PROMPT` / `SUMMARY_PROMPT` 共用 `MATH_RULE`，**强制模型把数学一律写成 LaTeX**（行内 `$…$`、独立 `$$…$$`，变量与下标也要包）。没有这条时模型只给独立公式加 `$$`，行内符号写成裸文本（`d²_hat{q}`、`λ_bound`），既进不了 KaTeX，还会把 `hat{}` 这种命令名直接显示出来 —— 渲染器再好也救不了没被标记成公式的文本。规则里同时禁用 Unicode 上下标与 `\begin{equation}`/`\label{}`。
-- **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部**横向标签栏**切换，样式与顶部文档标签栏 `#tabbar` 同一套语言）。面板默认仅 340px 宽，所以标签 `flex: 1 1 auto` 可收缩，收到 `min-width` 后整条横向滚动、`＋` 固定在右侧不滚走（当前标签 `flex-grow:1.6` 优先拿空间并保底 60px；完整标题放 `title` 兜底）。`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话，等待中的会话在标签上显示 `●`。
+- **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部**横向标签栏**切换，样式与顶部文档标签栏 `#tabbar` 同一套语言）。面板默认仅 340px 宽，所以标签 `flex: 1 1 auto` 可收缩，收到 `min-width` 后整条横向滚动、`＋` 固定在右侧不滚走（当前标签 `flex-grow:1.6` 优先拿空间并保底 60px；完整标题放 `title` 兜底）。`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）。**对话持久化在 `library.db` 的 `qa_sessions` 表**（按文库文档 id 绑定），刷新页面、重开应用都还在；标签快照只作为切标签时的内存缓存（`t.qaLib` 记录归属，换文档即失效重拉）。新建会话用递减负数作临时 id，首次 `qaPersist()` 后换成服务端 id —— 否则每次保存都会重复插入。落库时机是「一问一答完整之后」，不是每个增量 token。未入库的文档（`INFO.lib` 为空）退化为纯内存会话，问答照常可用。每文档最多 20 个对话、每对话 200 条消息、单条 20000 字符，超出丢最旧的。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话，等待中的会话在标签上显示 `●`。
 - **问答面板的垂直空间**：面板窄且高度有限，**常驻横幅会显著挤占对话区**。原先那条"基于当前文档全文…"的说明固定占 52px（三行），现改为：长说明走 `.qaempty` 空状态（放在 `#qaList` 内部，有消息后 `addQaBubble` 自动移除），临时提示走 `qaStatus()`（`#qaHint` 平时 `display:none`，有消息才出现、3 秒后自动消失）。对话区占比由 75% 提到 81%。
 - **公式渲染**：`mathtex.js` 封装 **KaTeX 0.16**（与 ChatGPT 同方案，排版基于 TeX 字体度量）。JS/CSS/woff2 字体全部自托管在 `static/vendor/katex/`，**不引任何 CDN**（本机应用，必须离线可用）；只有 woff2 会被实际请求（`@font-face` 里排第一）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。`throwOnError:false` 让流式中途的半截公式以警告色显示原文而不是整块消失；`strict:false` 允许公式里出现中文；`trust:false` 关掉 `\href`/`\html*`/`\includegraphics`；`maxExpand`/`maxSize` 限制宏展开与尺寸；`macros` 每次传副本，否则一条公式的 `\gdef` 会泄漏到后面的公式。MathML 里的 `<annotation>` 保留原始 LaTeX（可朗读、可复制回 TeX），所以断言「无裸 TeX」时要先剥掉它。
 - **Markdown 行内变换**：`mdRender` 的 `inline()` **先把公式/行内代码整段换成占位符，再做 `**粗体**`/`*斜体*`，最后还原**。不能反过来（先按公式切片再逐片套正则）—— 模型很爱写 `**$d^2_{\Pi,i}$：点到切平面的距离**`，切片后 `**` 的开闭落在公式两侧的不同片段里，永远配不上对，`**` 就被原样显示出来。强调标记要求紧邻非空白，避免把 `a * b` 的乘号当强调。
@@ -143,12 +148,12 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 ## 测试
 
 ```bash
-pip install -e '.[test]' && python -m pytest -q     # 后端 145 项
+pip install -e '.[test]' && python -m pytest -q     # 后端 160 项
 node --test tests/test_frontend.cjs                 # 前端 20 项（需 Node 22+）
 ```
 
 - `tests/conftest.py`：`client` fixture（TestClient + 临时目录）、`make_pdf` 合成 PDF
-- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
+- 测试文件按域划分：`test_server.py`(服务端) · `test_library.py`(文库/划线/问答) · `test_translation.py` · `test_update.py`(更新/看门狗/代理) · `test_linemerge.py`(段落合并骨架) · `test_links.py`(文内链接与坐标换算) · `test_epub.py` · `test_txt.py` · `test_urlfetch.py` · `test_extract_settings.py`
 - 测试不调付费 API：monkeypatch `Translator._chat`（问答/润色）或 `Translator.translate`（翻译）
 - 前端 cjs 测试按 `JS_FILES` 顺序拼接 `static/js/*.js` 后用 vm 跑（截到 `/* 启动:` 之前），新增 js 文件要同步加入该列表，改 DOM 结构或启动逻辑时注意兼容；KaTeX 由测试 `require` 本地那份 `vendor/katex/katex.min.js` 后注入 vm 上下文，与浏览器用的是同一个文件
 

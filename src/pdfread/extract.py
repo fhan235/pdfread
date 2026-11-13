@@ -20,6 +20,8 @@ from typing import Iterable
 
 import pymupdf
 
+from . import linemerge
+
 
 # ---------- 数据结构 ----------
 
@@ -242,87 +244,19 @@ def _merge_lines(col: list[Line], body_size: float) -> list[tuple[str, float, fl
     """把同一列的行合并成自然段。
 
     返回 [(文本, y坐标, 字号, 是否粗体), ...]
+
+    骨架(列边界/行距/续行判据/连字符拼接)在 linemerge 里与论文模式共用;
+    本模块的正则按通用文档调, 与 paper.py 的那套不同, 因此作为参数传入。
     """
-    if not col:
-        return []
-
-    # 该列的右边界(取 90 分位, 避免个别超长行干扰)
-    xs = sorted(l.x1 for l in col)
-    col_right = xs[int(len(xs) * 0.9)] if xs else 0.0
-    # 该列的左边界
-    x0s = sorted(l.x0 for l in col)
-    col_left = x0s[int(len(x0s) * 0.1)] if x0s else 0.0
-    # 常见行距
-    gaps = [
-        col[i].y0 - col[i - 1].y1
-        for i in range(1, len(col))
-        if 0 <= col[i].y0 - col[i - 1].y1 < 40
-    ]
-    norm_gap = median(gaps) if gaps else 3.0
-
-    paras: list[tuple[str, float, float, bool]] = []
-    buf: list[Line] = []
-
-    def flush() -> None:
-        if not buf:
-            return
-        parts: list[str] = []
-        for i, ln in enumerate(buf):
-            t = ln.text.strip()
-            if i == 0:
-                parts.append(t)
-                continue
-            prev = parts[-1]
-            # 行尾连字符断词 -> 直接拼接
-            if _HYPHEN_END.search(prev):
-                parts[-1] = _HYPHEN_END.sub(r"\1", prev) + t
-            else:
-                parts[-1] = prev + " " + t
-        text = re.sub(r"\s{2,}", " ", parts[0]).strip()
-        first = buf[0]
-        paras.append(
-            (text, first.y0, max(l.size for l in buf), any(l.bold for l in buf))
-        )
-        buf.clear()
-
-    for ln in col:
-        if not buf:
-            buf.append(ln)
-            continue
-
-        prev = buf[-1]
-        prev_txt = prev.text.strip()
-        gap = ln.y0 - prev.y1
-
-        # 前一行是否"写满"该列宽度(两端对齐时右边界会有波动, 用相对比例更稳)
-        span = max(col_right - col_left, 1.0)
-        prev_full = prev.x1 >= col_left + span * 0.82
-        # 前一行是否以句末标点收尾 —— 未收尾几乎必定是折行续接
-        prev_ends = bool(_SENT_END.search(prev_txt))
-        # 行尾连字符断词, 必然续行
-        hyphen = bool(_HYPHEN_END.search(prev_txt))
-
-        same_size = abs(ln.size - prev.size) <= 0.6
-        near = -prev.size * 0.5 <= gap <= max(norm_gap * 2.2, prev.size * 1.1)
-        indent_ok = abs(ln.x0 - col_left) <= prev.size * 1.2 or ln.x0 >= prev.x0
-        new_item = bool(_LIST_START.match(ln.text))
-
-        cont = (
-            same_size
-            and near
-            and indent_ok
-            and not new_item
-            and (hyphen or prev_full or not prev_ends)
-        )
-
-        if cont:
-            buf.append(ln)
-        else:
-            flush()
-            buf.append(ln)
-
-    flush()
-    return paras
+    return linemerge.merge_lines(
+        col,
+        sent_end=_SENT_END,
+        hyphen_end=_HYPHEN_END,
+        list_start=_LIST_START,
+        emit=lambda buf, text: (
+            text, buf[0].y0, max(l.size for l in buf), any(l.bold for l in buf)
+        ),
+    )
 
 
 def _classify(text: str, size: float, bold: bool, body_size: float) -> str:

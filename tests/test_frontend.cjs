@@ -5,12 +5,13 @@ const vm = require('node:vm');
 const test = require('node:test');
 // 公式渲染交给本地自托管的 KaTeX, 与浏览器里加载的是同一份文件
 const katex = require('../src/pdfread/static/vendor/katex/katex.min.js');
-// 前端按功能拆成多个经典脚本, 共享全局作用域, 加载顺序即依赖顺序
-const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'links', 'mathtex', 'panels', 'ui', 'prefs'];
+// 前端按功能拆成多个经典脚本, 共享全局作用域, 加载顺序即依赖顺序。
+// boot.js(启动序列)不在此列: 它只负责在浏览器里把各模块串起来,
+// 单测不需要真的跑启动流程。
+const JS_FILES = ['state', 'tabs', 'pages', 'library', 'highlight', 'links', 'mathtex', 'panels', 'ui', 'prefs', 'update'];
 const script = JS_FILES
   .map((f) => fs.readFileSync(`src/pdfread/static/js/${f}.js`, 'utf8'))
-  .join('\n')
-  .split('/* 启动:')[0];
+  .join('\n');
 
 function setup() {
   const elements = new Map();

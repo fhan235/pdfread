@@ -21,6 +21,8 @@ from typing import Iterable
 
 import pymupdf
 
+from . import linemerge
+
 
 # ---------- 数据结构 ----------
 
@@ -342,87 +344,31 @@ def _merge_lines(col: list[Line]) -> list[tuple[str, float, float, bool, bool]]:
 
     返回 [(文本, y, 字号, 粗体, 是否图表内), ...]
     图表内的行不与正文行合并。
+
+    骨架与 extract.py 共用(见 linemerge); 论文模式特有的两条规则通过
+    split_before 注入, 正则也用本模块这套(按论文版面调, 比通用的更严)。
     """
-    if not col:
-        return []
-
-    xs = sorted(l.x1 for l in col)
-    col_right = xs[int(len(xs) * 0.9)]
-    x0s = sorted(l.x0 for l in col)
-    col_left = x0s[int(len(x0s) * 0.1)]
-    span = max(col_right - col_left, 1.0)
-    gaps = [
-        col[i].y0 - col[i - 1].y1
-        for i in range(1, len(col))
-        if 0 <= col[i].y0 - col[i - 1].y1 < 40
-    ]
-    norm_gap = median(gaps) if gaps else 3.0
-
-    out: list[tuple[str, float, float, bool, bool]] = []
-    buf: list[Line] = []
-
-    def flush() -> None:
-        if not buf:
-            return
-        parts: list[str] = []
-        for i, ln in enumerate(buf):
-            t = ln.text.strip()
-            if i == 0:
-                parts.append(t)
-                continue
-            prev = parts[-1]
-            if _HYPHEN_END.search(prev):
-                parts[-1] = _HYPHEN_END.sub(r"\1", prev) + t
-            else:
-                parts[-1] = prev + " " + t
-        first = buf[0]
-        out.append((
-            _clean(parts[0]),
-            first.y0,
-            max(l.size for l in buf),
-            any(l.bold for l in buf),
-            first.in_fig,
-        ))
-        buf.clear()
-
-    for ln in col:
-        if not buf:
-            buf.append(ln)
-            continue
-        prev = buf[-1]
+    def split_before(prev: Line, cur: Line, gap: float) -> bool:
         # 图表内外不混合
-        if prev.in_fig != ln.in_fig:
-            flush()
-            buf.append(ln)
-            continue
+        if prev.in_fig != cur.in_fig:
+            return True
+        # 图表内的短标签(坐标轴、图例)互不合并
+        if cur.in_fig and (len(prev.text.strip()) < 30 or gap > prev.size * 1.2):
+            return True
+        return False
 
-        pt = prev.text.strip()
-        gap = ln.y0 - prev.y1
-        prev_full = prev.x1 >= col_left + span * 0.82
-        prev_ends = bool(_SENT_END.search(pt))
-        hyphen = bool(_HYPHEN_END.search(pt))
-        same_size = abs(ln.size - prev.size) <= 0.6
-        near = -prev.size * 0.5 <= gap <= max(norm_gap * 2.2, prev.size * 1.1)
-        indent_ok = abs(ln.x0 - col_left) <= prev.size * 1.2 or ln.x0 >= prev.x0
-        new_item = bool(_LIST_START.match(ln.text))
-        # 图表内的短标签互不合并
-        if ln.in_fig and (len(pt) < 30 or gap > prev.size * 1.2):
-            flush()
-            buf.append(ln)
-            continue
-
-        cont = (
-            same_size and near and indent_ok and not new_item
-            and (hyphen or prev_full or not prev_ends)
-        )
-        if cont:
-            buf.append(ln)
-        else:
-            flush()
-            buf.append(ln)
-
-    flush()
-    return out
+    return linemerge.merge_lines(
+        col,
+        sent_end=_SENT_END,
+        hyphen_end=_HYPHEN_END,
+        list_start=_LIST_START,
+        emit=lambda buf, text: (
+            text, buf[0].y0, max(l.size for l in buf),
+            any(l.bold for l in buf), buf[0].in_fig,
+        ),
+        split_before=split_before,
+        clean=_clean,
+    )
 
 
 # ---------- 分类 ----------
