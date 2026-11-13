@@ -64,15 +64,22 @@ class Library:
         self._conn.execute("PRAGMA foreign_keys = ON")
         with self._lock:
             self._conn.executescript(_SCHEMA)
-            # 旧库迁移: 补阅读进度/总页数列
+            # 旧库迁移: 补阅读进度/总页数/内容哈希列
             for ddl in ("ALTER TABLE documents ADD COLUMN"
                         " progress INTEGER NOT NULL DEFAULT 0",
                         "ALTER TABLE documents ADD COLUMN"
-                        " pages INTEGER NOT NULL DEFAULT 0"):
+                        " pages INTEGER NOT NULL DEFAULT 0",
+                        # 内容哈希用于查重; 允许为空(旧记录与哈希失败的情况),
+                        # 不加 UNIQUE —— 用户可以主动选择"仍然导入一份"
+                        "ALTER TABLE documents ADD COLUMN"
+                        " sha256 TEXT NOT NULL DEFAULT ''"):
                 try:
                     self._conn.execute(ddl)
                 except sqlite3.OperationalError:
                     pass  # 列已存在
+            # 查重按哈希命中, 建索引避免全表扫描
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_sha"
+                               " ON documents(sha256)")
             self._conn.commit()
 
     def close(self) -> None:
@@ -122,7 +129,7 @@ class Library:
     # ---------- 文档 ----------
 
     def upsert_document(self, path: str, name: str, title: str = "",
-                        pages: int = 0) -> int:
+                        pages: int = 0, sha256: str = "") -> int:
         """按绝对路径登记文档, 重复打开只刷新时间; 返回文库文档 id。"""
         now = time.time()
         with self._lock:
@@ -134,19 +141,44 @@ class Library:
                 self._conn.execute(
                     "UPDATE documents SET last_opened = ?,"
                     " name = ?, title = CASE WHEN ? != '' THEN ? ELSE title END,"
-                    " pages = CASE WHEN ? > 0 THEN ? ELSE pages END"
+                    " pages = CASE WHEN ? > 0 THEN ? ELSE pages END,"
+                    " sha256 = CASE WHEN ? != '' THEN ? ELSE sha256 END"
                     " WHERE id = ?",
-                    (now, name, title, title, pages, pages, doc_id),
+                    (now, name, title, title, pages, pages,
+                     sha256, sha256, doc_id),
                 )
             else:
                 cur = self._conn.execute(
                     "INSERT INTO documents (path, name, title, pages, added,"
-                    " last_opened) VALUES (?, ?, ?, ?, ?, ?)",
-                    (path, name, title or "", pages, now, now),
+                    " last_opened, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (path, name, title or "", pages, now, now, sha256 or ""),
                 )
                 doc_id = cur.lastrowid
             self._conn.commit()
             return doc_id
+
+    def find_by_hash(self, sha256: str, exclude_path: str = "") -> dict | None:
+        """按内容哈希找已入库的同一文件, 用于导入查重。
+
+        exclude_path 用于排除"就是这个文件本身"(同路径重复打开不是重复导入,
+        不该打扰用户); 只有换了路径的同内容文件才算重复。
+        返回最近打开的一条。
+        """
+        if not sha256:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, path, name, title, added, last_opened, pages,"
+                " progress FROM documents"
+                " WHERE sha256 = ? AND path != ?"
+                " ORDER BY last_opened DESC LIMIT 1",
+                (sha256, exclude_path),
+            ).fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "path": row[1], "name": row[2], "title": row[3],
+                "added": row[4], "last_opened": row[5], "pages": row[6],
+                "progress": row[7], "exists": Path(row[1]).is_file()}
 
     def set_progress(self, doc_id: int, page: int) -> None:
         """记录阅读进度(页码)。"""

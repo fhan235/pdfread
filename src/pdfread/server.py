@@ -158,7 +158,37 @@ def _cleanup_upload(path: Path) -> None:
             time.sleep(0.05 * (attempt + 1))
 
 
-def _register(path: Path, data: dict, name: str | None = None) -> dict:
+def file_sha256(path: Path) -> str:
+    """文件内容哈希, 用于导入查重。
+
+    分块读取, 200MB 的上传也只占 1MB 内存。失败(文件被占用/权限)时返回空串,
+    调用方按"无法判重"处理, 绝不因此挡住正常打开。
+    """
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 20):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _duplicate_of(path: Path, sha: str) -> dict | None:
+    """文库里是否已有同内容但不同路径的文档。
+
+    同路径视为"再次打开同一个文件", 不是重复导入, 不打扰用户。
+    """
+    if not sha or STATE["library"] is None:
+        return None
+    try:
+        return STATE["library"].find_by_hash(sha, exclude_path=str(path))
+    except Exception:
+        return None
+
+
+def _register(path: Path, data: dict, name: str | None = None,
+              sha: str = "") -> dict:
     # 同一路径重复打开时复用原 id: 前端标签保持稳定, 不产生重复标签
     doc_id = None
     for old_id, old in list(STATE["docs"].items()):
@@ -172,7 +202,7 @@ def _register(path: Path, data: dict, name: str | None = None) -> dict:
         if STATE["library"] is not None:
             current["lib"] = STATE["library"].upsert_document(
                 str(path), current["name"], data.get("title") or "",
-                pages=len(data["pages"]))
+                pages=len(data["pages"]), sha256=sha)
             current["progress"] = STATE["library"].get_progress(current["lib"])
     except Exception:
         pass  # 文库登记失败不影响阅读
@@ -520,7 +550,9 @@ async def library_open(payload: dict) -> dict:
         if parent.is_dir():
             STATE["roots"].append(parent)
     data = await _inspect(p, True)
-    current = _register(p, data, name)
+    # 顺带回填哈希: 查重功能上线前入库的老记录借此逐步获得判重能力
+    current = _register(p, data, name,
+                        sha=await asyncio.to_thread(file_sha256, p))
     return info(current["id"])
 
 
@@ -589,11 +621,24 @@ def delete_mark(payload: dict) -> dict:
     return {"ok": True}
 
 
+def _dup_payload(dup: dict, sha: str) -> dict:
+    """查重命中时返回给前端的信息(不含真实路径以外的敏感内容)。"""
+    return {"duplicate": True, "sha256": sha, "existing": dup}
+
+
 @app.post("/api/open")
-async def open_pdf(path: str = Query(...), skip_references: bool = True) -> dict:
+async def open_pdf(path: str = Query(...), skip_references: bool = True,
+                   force: bool = False) -> dict:
+    """打开本地文件; force=1 表示用户已确认"仍然导入一份", 跳过查重。"""
     target = _safe_resolve(path)
+    sha = await asyncio.to_thread(file_sha256, target)
+    if not force:
+        dup = _duplicate_of(target, sha)
+        if dup:
+            # 409: 不是错误, 是"需要用户决策"; 此时还没解析, 不浪费算力
+            return JSONResponse(_dup_payload(dup, sha), status_code=409)
     data = await _inspect(target, skip_references)
-    current = _register(target, data)
+    current = _register(target, data, sha=sha)
     return info(current["id"])
 
 
@@ -654,16 +699,29 @@ async def open_url(payload: dict) -> dict:
     if root not in STATE["roots"]:
         STATE["roots"].append(root)
 
+    sha = await asyncio.to_thread(file_sha256, path)
+    if not bool(payload.get("force")):
+        dup = _duplicate_of(path, sha)
+        if dup:
+            _set_progress(task, "done")
+            return JSONResponse(_dup_payload(dup, sha), status_code=409)
+
     _set_progress(task, "parse")
     data = await _inspect(path, True)
-    current = _register(path, data, name)
+    current = _register(path, data, name, sha=sha)
     _set_progress(task, "done")
     return info(current["id"])
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), skip_references: bool = True) -> dict:
-    """上传 PDF/EPUB 并立即打开。存到用户缓存目录, 不污染安装目录。"""
+async def upload(file: UploadFile = File(...), skip_references: bool = True,
+                 force: bool = False) -> dict:
+    """上传 PDF/EPUB 并立即打开。存到用户缓存目录, 不污染安装目录。
+
+    上传每次都生成新的 uuid 路径, 是最容易产生重复条目的入口, 因此落盘后
+    先按内容哈希查重; 命中且用户未确认时删掉刚落盘的副本再返回 409,
+    不留垃圾文件。
+    """
     name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     ext = Path(name).suffix.lower()
     if ext not in (".pdf", ".epub", ".txt"):
@@ -683,12 +741,18 @@ async def upload(file: UploadFile = File(...), skip_references: bool = True) -> 
                     raise HTTPException(413, "文件过大(上限 200 MB)")
                 fh.write(chunk)
         temporary.replace(dest)
+        sha = await asyncio.to_thread(file_sha256, dest)
+        if not force:
+            dup = _duplicate_of(dest, sha)
+            if dup:
+                _cleanup_upload(dest)   # 用户要决策, 先不留下这份副本
+                return JSONResponse(_dup_payload(dup, sha), status_code=409)
         try:
             data = await _inspect(dest, skip_references)
         except HTTPException:
             _cleanup_upload(dest)
             raise
-        current = _register(dest, data, name)
+        current = _register(dest, data, name, sha=sha)
     finally:
         _cleanup_upload(temporary)
         await file.close()

@@ -353,3 +353,95 @@ def test_library_persists_and_cleans_orphan_tags(tmp_path):
     lib.set_tags(doc_id, ["b"])
     assert [t["name"] for t in lib.overview()["tags"]] == ["b"]
     lib.close()
+
+def test_duplicate_detection_by_content_hash(tmp_path):
+    """查重按内容哈希: 同内容不同路径算重复, 同路径不算(那是再次打开)。"""
+    from pdfread.library import Library
+
+    lib = Library(str(tmp_path / "library.db"))
+    sha = "a" * 64
+    lib.upsert_document("/tmp/paper.pdf", "paper.pdf", "某论文", pages=10,
+                        sha256=sha)
+
+    hit = lib.find_by_hash(sha, exclude_path="/tmp/other.pdf")
+    assert hit and hit["title"] == "某论文" and hit["pages"] == 10
+    # 同路径: 是"再次打开同一个文件", 不该报重复
+    assert lib.find_by_hash(sha, exclude_path="/tmp/paper.pdf") is None
+    # 不同内容 / 空哈希(旧记录或哈希失败)都不该误报
+    assert lib.find_by_hash("b" * 64, exclude_path="") is None
+    assert lib.find_by_hash("", exclude_path="") is None
+    lib.close()
+
+
+def test_library_db_migration_adds_sha_column(tmp_path):
+    """上线查重前建的旧库要能平滑迁移, 老记录哈希为空不参与判重。"""
+    import sqlite3
+    db = str(tmp_path / "old.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY, path TEXT UNIQUE,"
+                 " name TEXT, title TEXT DEFAULT '', folder_id INTEGER,"
+                 " added REAL, last_opened REAL)")
+    conn.execute("INSERT INTO documents (path, name, added)"
+                 " VALUES ('/tmp/old.pdf', 'old.pdf', 1)")
+    conn.commit()
+    conn.close()
+
+    from pdfread.library import Library
+    lib = Library(db)
+    assert lib.find_by_hash("", exclude_path="") is None
+    # 再次打开时回填哈希, 老记录随之获得判重能力
+    lib.upsert_document("/tmp/old.pdf", "old.pdf", sha256="c" * 64)
+    assert lib.find_by_hash("c" * 64, exclude_path="/x")["name"] == "old.pdf"
+    lib.close()
+
+
+def test_upload_duplicate_prompts_and_force_imports(client, make_pdf):
+    """上传查重: 同内容再传返回 409 且不留落盘副本; force=1 才真的导入。"""
+    from pdfread.paths import uploads_dir
+
+    src = make_pdf("dup.pdf")
+    data = src.read_bytes()
+
+    first = client.post("/api/upload", files={"file": ("dup.pdf", data, "application/pdf")})
+    assert first.status_code == 200
+    before = len(list(uploads_dir().glob("*.pdf")))
+
+    # 换个文件名重传同样的内容 -> 命中查重
+    second = client.post("/api/upload", files={"file": ("另一个名字.pdf", data, "application/pdf")})
+    assert second.status_code == 409
+    body = second.json()
+    assert body["duplicate"] is True
+    assert body["existing"]["name"] == "dup.pdf"
+    # 被拒的那份不能留在磁盘上
+    assert len(list(uploads_dir().glob("*.pdf"))) == before
+
+    # 用户选择"仍然导入一份"
+    forced = client.post("/api/upload?force=1",
+                         files={"file": ("另一个名字.pdf", data, "application/pdf")})
+    assert forced.status_code == 200
+    assert len(list(uploads_dir().glob("*.pdf"))) == before + 1
+
+
+def test_open_duplicate_detects_copy_and_same_path_reopens(client, make_pdf):
+    """打开本地文件: 同内容的副本算重复, 原路径再次打开不算。"""
+    src = make_pdf("orig.pdf")
+    assert client.post(f"/api/open?path={src}").status_code == 200
+
+    # 同一个文件再次打开: 不该打扰用户
+    assert client.post(f"/api/open?path={src}").status_code == 200
+
+    copy = src.parent / "copy.pdf"
+    copy.write_bytes(src.read_bytes())
+    dup = client.post(f"/api/open?path={copy}")
+    assert dup.status_code == 409
+    assert dup.json()["existing"]["name"] == "orig.pdf"
+    # force 后放行
+    assert client.post(f"/api/open?path={copy}&force=1").status_code == 200
+
+
+def test_different_content_is_not_flagged(client, make_pdf):
+    """内容不同就不能误报 —— 这是零误报承诺的底线。"""
+    a = make_pdf("a.pdf", text="First paper content")
+    b = make_pdf("b.pdf", text="Totally different paper")
+    assert client.post(f"/api/open?path={a}").status_code == 200
+    assert client.post(f"/api/open?path={b}").status_code == 200

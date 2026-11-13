@@ -113,7 +113,70 @@ $("#pkList").addEventListener("click", (e) => {
   else if (row.dataset.file) openFile(row.dataset.file);
 });
 
-async function openFile(path) {
+/* ---------------- 导入查重 ---------------- */
+/* 服务端按文件内容 SHA-256 判重, 命中返回 409 + 已有记录。
+   这里把"下一步怎么做"交给用户: 打开已有的 / 仍然导入一份 / 取消。
+   retry(force) 由各入口传入, 用于在用户选择"仍然导入"后原样重试。 */
+let dupRetry = null;
+let dupRestore = null;   // 取消时恢复右栏原内容, 不留"正在解析…"
+
+function showDuplicate(d, retry, restore) {
+  dupRetry = retry;
+  dupRestore = restore;
+  hideBusy();            // 等用户决策期间不该还转着进度
+  const e = d.existing || {};
+  $("#dupTitle").textContent = e.title || e.name || "(未命名)";
+  const bits = [];
+  if (e.pages) bits.push(e.pages + " 页");
+  if (e.last_opened) bits.push("上次打开 " + ago(e.last_opened));
+  else if (e.added) bits.push("导入于 " + ago(e.added));
+  if (e.progress > 1) bits.push("已读到第 " + e.progress + " 页");
+  $("#dupMeta").textContent = bits.join(" · ");
+  $("#dupPath").textContent = e.exists === false
+    ? "原文件已不在：" + (e.path || "")
+    : (e.path || "");
+  // 原文件丢了就别让用户选"打开已有的", 那必然失败
+  $("#dupOpen").style.display = e.exists === false ? "none" : "";
+  $("#dupHint").textContent = e.exists === false
+    ? "文库里的那份原文件已移动或删除，建议重新导入。"
+    : "打开已有的那份可以保留原有的划线、标签和阅读进度。";
+  $("#dup").classList.add("on");
+}
+
+/* 关掉弹窗; restore 为 true 时把右栏恢复成打开前的样子 */
+function closeDup(restore) {
+  $("#dup").classList.remove("on");
+  if (restore && dupRestore) dupRestore();
+  dupRetry = null;
+  dupRestore = null;
+  hideBusy();
+}
+
+$("#dupClose").onclick = () => closeDup(true);
+$("#dupCancel").onclick = () => closeDup(true);
+$("#dup").addEventListener("click", (e) => {
+  if (e.target.id === "dup") closeDup(true);
+});
+$("#dupOpen").onclick = () => {
+  const id = Number($("#dupOpen").dataset.lib || 0);
+  closeDup(true);        // 先恢复, openLibDoc 会自己再铺内容
+  if (id) openLibDoc(id);
+};
+$("#dupImport").onclick = () => {
+  const again = dupRetry;
+  closeDup(false);       // 要重试, 不恢复(马上又会显示进度)
+  if (again) again();
+};
+
+/* 统一处理打开类请求的 409: 命中查重则弹窗并返回 true */
+function handleDup(data, status, retry, restore) {
+  if (status !== 409 || !data || !data.duplicate) return false;
+  $("#dupOpen").dataset.lib = (data.existing && data.existing.id) || 0;
+  showDuplicate(data, retry, restore);
+  return true;
+}
+
+async function openFile(path, force) {
   const serial = ++fileSerial, previous = right.innerHTML;
   // 打开新文件前停掉当前翻译流并快照当前标签, 避免 busy 提示覆盖快照
   if (es) { es.close(); es = null; }
@@ -122,20 +185,25 @@ async function openFile(path) {
   snapshotTab();
   closePicker();
   setBusyProg("正在解析 " + path.split(/[/\\]/).pop() + " …", null);
+  const restore = () => { right.innerHTML = previous; };
   try {
-    const r = await fetch("/api/open?path=" + encodeURIComponent(path), { method: "POST" });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
-    if (serial === fileSerial) await reload(await r.json());
+    const r = await fetch("/api/open?path=" + encodeURIComponent(path)
+      + (force ? "&force=1" : ""), { method: "POST" });
+    const d = await r.json();
+    if (serial !== fileSerial) return;
+    if (handleDup(d, r.status, () => openFile(path, true), restore)) return;
+    if (!r.ok) throw new Error(d.detail || r.status);
+    await reload(d);
   } catch (e) {
     if (serial === fileSerial) {
-      right.innerHTML = previous;
+      restore();
       hideBusy();
       $("#runStatus").textContent = "打开失败：" + e;
     }
   }
 }
 
-function uploadFile(file) {
+function uploadFile(file, force) {
   if (!file || !/\.(pdf|epub|txt)$/i.test(file.name)) { setBusy("仅支持 PDF / EPUB / TXT 文件", true); return; }
   if (file.size > 200 * 1024 * 1024) { setBusy("文件过大（上限 200 MB）", true); return; }
   const serial = ++fileSerial, previous = right.innerHTML;
@@ -150,7 +218,7 @@ function uploadFile(file) {
 
   // 用 XHR 获取真实上传进度(fetch 不支持 upload progress)
   const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/api/upload");
+  xhr.open("POST", "/api/upload" + (force ? "?force=1" : ""));
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable && serial === fileSerial) {
       setBusyProg(`正在上传 ${file.name}（${mb} MB）`,
@@ -162,17 +230,18 @@ function uploadFile(file) {
   };
   xhr.onload = async () => {
     if (serial !== fileSerial) return;
+    let data = null;
+    try { data = JSON.parse(xhr.responseText); } catch (e) {}
+    // 查重命中: 重试时带 force, 服务端会跳过检查
+    if (handleDup(data, xhr.status, () => uploadFile(file, true),
+                  () => { right.innerHTML = previous; })) return;
     if (xhr.status < 400) {
-      let data = null;
-      try { data = JSON.parse(xhr.responseText); } catch (e) {}
       await reload(data);
       return;
     }
-    let msg = xhr.status;
-    try { msg = JSON.parse(xhr.responseText).detail || msg; } catch (e) {}
     right.innerHTML = previous;
     hideBusy();
-    $("#runStatus").textContent = "上传失败：" + msg;
+    $("#runStatus").textContent = "上传失败：" + ((data && data.detail) || xhr.status);
   };
   xhr.onerror = () => {
     if (serial !== fileSerial) return;
@@ -227,12 +296,14 @@ async function reload(data) {
 $("#btnOpen").onclick = openPicker;
 $("#pkClose").onclick = closePicker;
 $("#pkUp").onclick = () => $("#pkFile").click();
-$("#pkOpenUrl").onclick = openUrl;
+/* 注意: 必须包一层箭头函数。直接 onclick = openUrl 会把 MouseEvent
+   当成 force 参数传进去(真值), 导致首次点击就跳过查重 */
+$("#pkOpenUrl").onclick = () => openUrl();
 $("#pkUrl").addEventListener("keydown", (e) => {
   if (e.key === "Enter") openUrl();
 });
 
-async function openUrl() {
+async function openUrl(force) {
   const inp = $("#pkUrl"), url = inp.value.trim();
   if (!url) return;
   const serial = ++fileSerial, previous = right.innerHTML;
@@ -265,11 +336,16 @@ async function openUrl() {
     const r = await fetch("/api/open-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, task }),
+      body: JSON.stringify({ url, task, force: !!force }),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const d = await r.json();
+    if (serial !== fileSerial) return;
+    // URL 重试时输入框还没清空, 可以原样再发一次
+    if (handleDup(d, r.status, () => openUrl(true),
+                  () => { right.innerHTML = previous; })) return;
+    if (!r.ok) throw new Error(d.detail || r.status);
     inp.value = "";
-    if (serial === fileSerial) await reload(await r.json());
+    await reload(d);
   } catch (e) {
     if (serial === fileSerial) {
       right.innerHTML = previous;

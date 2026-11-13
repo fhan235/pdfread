@@ -44,7 +44,8 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 
 阅读：`GET /api/page/{n}.svg`（默认）L816 · `GET /api/page/{n}.png` L838 · `GET /api/text/{n}` L859 · `GET /api/translate`(SSE) L867 · `GET /api/polish`(SSE) L943 · `POST /api/ask` L1051 · `POST /api/ask-stream`(SSE 流式) L1067 · `POST /api/translate-text`(划词翻译, 走缓存) L1094 · `POST /api/summary`(缓存) L1113 · `GET /api/raw` L1135
 EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/{n}`(包内图片, SVG 加 CSP sandbox) L796
-文档管理：`GET /api/docs` L273 · `POST /api/docs/close` L286 · `GET /api/info` L299 · `POST /api/open` L573 · `POST /api/upload` L645 · `POST /api/open-url` L598 · `GET /api/browse` L362 · `POST /api/roots`(加白名单) L348 · `GET /api/progress`(打开任务进度轮询) L593 · `GET /api/history` L401 · `POST /api/history/remove` L409
+文档管理：`GET /api/docs` · `POST /api/docs/close` · `GET /api/info` · `POST /api/open`(支持 `force=1` 跳过查重) · `POST /api/upload`(同) · `POST /api/open-url`(body 里 `force`) · `GET /api/browse` · `POST /api/roots`(加白名单) · `GET /api/progress`(打开任务进度轮询) · `GET /api/history` · `POST /api/history/remove`
+> 三个打开入口命中内容查重时返回 **409** `{duplicate, sha256, existing}`，不是错误而是等用户决策。
 文库：`GET /api/library` L425 · folders L430-451 · documents move/tags/remove L454-481 · `POST /api/library/open` L495 · `POST /api/library/progress` L484
 划线：`GET /api/words/{n}` L527 · `GET/POST /api/highlights` · `POST /api/highlights/delete`
 文内链接：`GET /api/links/{n}`(本页指向文档内其他位置的链接, 仅 PDF) L545
@@ -57,7 +58,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 数据 | 位置 | 结构 |
 |---|---|---|
 | 翻译/润色/摘要缓存 | `cache_dir()/translations.db` | 表 `t(k hash, v 文本)`，key 含 base_url+模型+提示词版本 |
-| 文库/高亮 | `config_dir()/library.db` | 表 `folders` `documents`(含 progress/pages 列, 旧库自动 ALTER 迁移) `tags` `document_tags` `highlights`（外键级联；高亮 rects 为 JSON 的 PDF 点坐标） |
+| 文库/高亮 | `config_dir()/library.db` | 表 `folders` `documents`(含 progress/pages/sha256 列, 旧库自动 ALTER 迁移; sha256 建索引供查重) `tags` `document_tags` `highlights`（外键级联；高亮 rects 为 JSON 的 PDF 点坐标） |
 | 设置/密钥 | `config_dir()/config.json`（0600） | 环境变量优先于配置文件；另含 `profiles`（按服务 model/base_url/qa_model）、`parse`（论文模式选项）、`history`（最近打开, 上限 20）、`proxy`（更新代理） |
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
 | 运行实例 | `cache_dir()/runtime.json` | `{pid, port}`，桌面版单实例探测 |
@@ -108,7 +109,9 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部下拉切换 + ＋/× 新建删除），`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）；会话组随标签快照存取，刷新页面不保留。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话。
 - **公式渲染**：`mathtex.js` 封装 **KaTeX 0.16**（与 ChatGPT 同方案，排版基于 TeX 字体度量）。JS/CSS/woff2 字体全部自托管在 `static/vendor/katex/`，**不引任何 CDN**（本机应用，必须离线可用）；只有 woff2 会被实际请求（`@font-face` 里排第一）。`$…$`/`\(…\)` 行内，`$$…$$`/`\[…\]` 独立成块（`$$` 单独一行也认，未闭合时按流式渲染到末尾）。行内公式要求 `$` 紧邻非空白，避免把金额当公式；表格按行切单元格前先把公式/行内代码换成占位符，防止公式里的 `|` 切坏表格。`throwOnError:false` 让流式中途的半截公式以警告色显示原文而不是整块消失；`strict:false` 允许公式里出现中文；`trust:false` 关掉 `\href`/`\html*`/`\includegraphics`；`maxExpand`/`maxSize` 限制宏展开与尺寸；`macros` 每次传副本，否则一条公式的 `\gdef` 会泄漏到后面的公式。MathML 里的 `<annotation>` 保留原始 LaTeX（可朗读、可复制回 TeX），所以断言「无裸 TeX」时要先剥掉它。
 - **Markdown 行内变换**：`mdRender` 的 `inline()` **先把公式/行内代码整段换成占位符，再做 `**粗体**`/`*斜体*`，最后还原**。不能反过来（先按公式切片再逐片套正则）—— 模型很爱写 `**$d^2_{\Pi,i}$：点到切平面的距离**`，切片后 `**` 的开闭落在公式两侧的不同片段里，永远配不上对，`**` 就被原样显示出来。强调标记要求紧邻非空白，避免把 `a * b` 的乘号当强调。
+- **滚动与画布**：**外层文档永不滚动**（`html, body { overflow: hidden }`），所有滚动都发生在内部面板里。配合主题变量只挂在 body（见下条），彻底消除"下拉露出画布"的黑屏/白屏。**flex 列里的滚动容器，其所有祖先都必须显式写 `min-height: 0`** —— flex 子项默认 `min-height:auto` 不肯收缩，漏一层就会把内容撑出面板、顶高整个页面（`#libMain` 漏写导致文库列表没有滚动条、页面被撑高到 3553px，下拉即白屏）。
 - **主题与画布底色**：主题变量的覆盖（`body.light` / `body.theme-paper` / `body.theme-green` / 自定义）全挂在 **body** 上，而 CSS 变量只向下继承 —— `html`（即 `:root`）永远只能取到深色默认值。因此**背景只能画在 body 上，绝不能给 `html` 加 `background: var(--bg)`**：那样过滚动（macOS 橡皮筋）露出的画布会是近黑色，浅色主题下表现为「滚轮下拉整窗黑屏」。html 不画背景时，body 的背景按规范传播到画布，始终跟随主题。另配 `overscroll-behavior`（html/body 用 `none`、`.pane` 用 `contain`）从源头掐掉滚动链外溢。
+- **导入查重**：三个入口（`/api/open`、`/api/upload`、`/api/open-url`）在解析前先算文件 **SHA-256**（`file_sha256()`，分块读，跑在 `to_thread` 里不阻塞事件循环），命中 `documents.sha256` 则返回 **409 + 已有记录**，前端弹窗给「打开已有的 / 仍然导入一份 / 取消」。`force=1` 跳过检查（用户已确认）。**同路径不算重复**（那是再次打开同一文件，不该打扰）；上传命中时会先删掉刚落盘的副本再返回，不留垃圾。只按内容哈希判定，字节不同就绝不报重复（零误报）；哈希为空（旧记录、读文件失败）一律不参与判重，`/api/library/open` 会顺带回填哈希让老记录逐步获得判重能力。
 - **顶栏布局**：控件按用途包在 `header .grp` 里，**组内 `inline-flex` 不换行、换行以整组为单位**，组间用 `.grp + .grp::before` 画细竖线。窄窗口靠 `style.css` 末尾的媒体查询逐级让位（1520 缩字号滑块 → 1400 隐字号 → 1320 隐缩放 → 1100 隐同步与 label），把顶栏锁在单行 47px；让位的都是设置面板或快捷键另有入口的低频控件。**媒体查询必须放文件末尾**：同优先级下后出现的规则胜出，放前面会被后面的 `.fontctl`/`.zoomctl` 基础规则覆盖掉（踩过）。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。

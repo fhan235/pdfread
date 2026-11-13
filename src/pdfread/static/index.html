@@ -235,6 +235,30 @@
   </div>
 </div>
 <div id="drop">松手即可打开该文件</div>
+<div id="dup">
+  <div class="box">
+    <div class="bar">
+      <b>这份文档可能已在文库中</b>
+      <span class="spacer"></span>
+      <button id="dupClose" class="ghost">关闭</button>
+    </div>
+    <div class="body">
+      <div class="hint">内容完全相同的文件已经导入过（按文件内容比对，不是看文件名）：</div>
+      <div class="dupcard">
+        <div class="t" id="dupTitle"></div>
+        <div class="m" id="dupMeta"></div>
+        <div class="m" id="dupPath"></div>
+      </div>
+      <div class="hint" id="dupHint"></div>
+      <div class="acts">
+        <button id="dupCancel" class="ghost">取消</button>
+        <span class="spacer"></span>
+        <button id="dupImport" class="ghost">仍然导入一份</button>
+        <button id="dupOpen">打开已有的</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="bye">
   <div class="t">pdfread 已退出</div>
   <div class="s">本地服务已停止，可以直接关闭此页面</div>
