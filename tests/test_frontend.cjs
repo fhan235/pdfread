@@ -25,7 +25,8 @@ function setup() {
   };
   const context = vm.createContext({
     document: { querySelector: element, querySelectorAll: () => [], addEventListener() {},
-      getElementById: id => element('#' + id), createElement: () => element('new') },
+      getElementById: id => element('#' + id), createElement: () => element('new'),
+      body: { classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } } } },
     window: { addEventListener() {} },
     sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
     localStorage: { getItem() { return null; }, setItem() {} },
@@ -282,6 +283,27 @@ test('library titles and tags are escaped in dense rows', () => {
   const html = element('#libList').innerHTML;
   assert.doesNotMatch(html, /<img|<script/);
   assert.match(html, /&lt;img/);
+});
+
+test('library full-screen mode renders cards with covers', () => {
+  const { element, run } = setup();
+  run(`LIB = {folders:[], tags:[], documents:[
+    {id:7,path:"/a",name:"a.pdf",title:"有封面的",folder_id:null,added:1,
+     last_opened:3,highlights:2,tags:["综述"],progress:14,pages:28,exists:true},
+    {id:8,path:"/b",name:"b.epub",title:"文件丢了的",folder_id:null,added:2,
+     last_opened:2,highlights:0,tags:[],progress:0,pages:0,exists:false}
+  ]}`);
+  // 大屏由 body.libfull 决定, 与侧栏密度设置无关
+  run('document.body.classList.contains = (c) => c === "libfull"');
+  run('prefs.libDense = true; prefs.libSort = "opened"; renderLibrary()');
+  const html = element('#libList').innerHTML;
+  assert.match(html, /class="card/);
+  assert.doesNotMatch(html, /class="doc dense/);        // 大屏不走紧凑行
+  assert.match(html, /\/api\/thumb\/7\.png/);           // 存在的文档请求封面
+  assert.match(html, /loading="lazy"/);                 // 懒加载, 不一次性拉完
+  assert.doesNotMatch(html, /\/api\/thumb\/8\.png/);    // 文件已丢失的不请求
+  assert.match(html, /class="ph">EPUB</);               // 退回扩展名占位
+  assert.match(html, /width:50%/);                      // 14/28 的进度条
 });
 
 test('export excludes failed paragraphs and labels partial output', () => {

@@ -49,6 +49,25 @@ def render_page_svg(path: str, num: int, stamp: tuple) -> bytes:
         return doc[num - 1].get_svg_image(text_as_path=True).encode("utf-8")
 
 
+def render_thumb(path: str, width: int = 240) -> bytes:
+    """文库封面缩略图: 首页按目标宽度渲染成 PNG。
+
+    与 render_page 的区别是不校验 stamp —— 文库里的文档通常没有打开,
+    没有 stamp 可比; 结果会按 (mtime, size) 落盘缓存, 文件变了自然换 key。
+    """
+    with pymupdf.open(path) as doc:
+        if not doc.page_count:
+            raise ValueError("空文档")
+        page = doc[0]
+        rect = page.rect
+        if rect.width <= 0:
+            raise ValueError("页面尺寸异常")
+        # 按宽度换算缩放比, 控制在合理范围, 避免超大页面吃内存
+        zoom = max(0.05, min(3.0, width / rect.width))
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+        return pix.tobytes("png")
+
+
 MAX_LINKS = 2000   # 单页链接上限, 防御异常文档
 
 _FIG_CAPTION = re.compile(r"^\s*(?:fig(?:ure)?\.?|图)\s*[A-Z]?\.?\d", re.I)

@@ -5,7 +5,7 @@ let prefs = { theme: "light", font: "15", layout: "side", layoutPrev: "side",
               zoom: 1, qa: false, leftPct: 0, libW: 320, qaW: 340, qaInH: 56,
               toc: false, efont: 16, eline: 1.9, efontFam: "serif",
               efontCustom: "",
-              libDense: true, libSort: "opened" };
+              libDense: true, libSort: "opened", libFull: false };
 
 /* 书籍(EPUB/TXT)字体预设 */
 const EFONT_STACKS = {
@@ -148,6 +148,7 @@ function applyPrefs() {
   syncSeg("segExpFmt", prefs.expFmt);
   syncSeg("segExpSrc", prefs.expSrc);
   if (prefs.lib) showLibrary();
+  if (prefs.libFull) setLibFull(true);   // 大屏状态跨会话保留
   document.body.classList.toggle("qa", !!prefs.qa);
   const bq = $("#btnQA");
   if (bq) bq.classList.toggle("on", !!prefs.qa);

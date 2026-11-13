@@ -4,6 +4,31 @@ let libScope = { kind: "all", id: 0, name: "" }; // all | none | folder | tag
 let libQuery = "";
 let libSel = new Set();                          // 批量操作选中的文档 id
 
+/* 大屏模式: 文库铺满整窗(网格 + 封面), 侧栏那套布局原样不动。
+   退出后回到原来的侧栏形态, 阅读区照旧。 */
+const libFull = () => document.body.classList.contains("libfull");
+
+function setLibFull(on) {
+  document.body.classList.toggle("libfull", !!on);
+  if (on) {
+    // 大屏必然要先打开文库
+    document.body.classList.add("lib");
+    $("#btnLib").classList.add("on");
+    prefs.lib = true;
+  }
+  prefs.libFull = !!on;
+  savePrefs();
+  const b = $("#btnLibFull");
+  if (b) {
+    b.classList.toggle("on", !!on);
+    b.textContent = on ? "退出大屏" : "大屏";
+    b.title = on ? "回到侧栏模式（Esc）" : "文库铺满窗口，带封面的网格视图";
+  }
+  // 先同步控件再取数: loadLibrary 是异步的, 放在它之后会被旧状态覆盖
+  syncLibControls();
+  if (on) loadLibrary(); else renderLibrary();
+}
+
 /* 文库为侧栏, 与阅读区共存; 开关只控制侧栏显隐, 状态记入偏好 */
 function showLibrary() {
   document.body.classList.add("lib");
@@ -28,10 +53,11 @@ async function loadLibrary() {
   renderLibrary();
 }
 
-/* 文档行。两种密度:
-   - 紧凑(默认): 标题与元信息挤在一行, 操作按钮悬停才浮现, 约 40px/行
-   - 舒适: 原来的卡片式, 信息全摊开, 约 154px/行
-   几十篇规模下紧凑模式一屏能看十几篇, 不用翻来翻去找。 */
+/* 文档行。三种呈现:
+   - 紧凑(侧栏默认): 一行一篇约 33px, 用于快速定位
+   - 舒适(侧栏): 原卡片式, 信息摊开
+   - 大屏网格: 整窗铺开, 带首页封面, 用于浏览和整理
+   大屏模式由 body.libfull 控制, 与侧栏的密度设置互不干扰。 */
 function docRow(d) {
   const date = d.last_opened ? new Date(d.last_opened * 1000).toLocaleDateString() : "";
   const read = d.progress > 0 && d.pages > 0;
@@ -39,6 +65,36 @@ function docRow(d) {
   const checked = libSel.has(d.id) ? " checked" : "";
   const box = `<input type="checkbox" class="libck" data-ck="${d.id}"${checked}`
     + ` title="选中以批量操作" />`;
+
+  if (libFull()) {
+    // 大屏卡片: 封面 + 标题 + 元信息; 封面加载失败(EPUB/TXT 或渲染不了)
+    // 退回文字占位, 不留破图
+    const ext = (d.name.split(".").pop() || "").toUpperCase();
+    return `<div class="card${d.exists ? "" : " gone"}"`
+      + `${libSel.has(d.id) ? ' data-sel="1"' : ""} data-id="${d.id}">`
+      + `<div class="cover" data-open="${d.id}">`
+      + (d.exists
+        ? `<img loading="lazy" src="/api/thumb/${d.id}.png" alt=""`
+          + ` onerror="this.remove()" />`
+        : "")
+      + `<span class="ph">${esc(ext || "DOC")}</span>`
+      + (read ? `<span class="bar"><i style="width:${pct}%"></i></span>` : "")
+      + `</div>`
+      + `<div class="meta">`
+      + `<div class="t" data-open="${d.id}" title="${esc(d.title || d.name)}">`
+      + `${esc(d.title || d.name)}</div>`
+      + `<div class="m">${esc(date)}`
+      + (read ? ` · ${pct}%` : "")
+      + (d.highlights ? ` · ✎${d.highlights}` : "")
+      + (d.exists ? "" : " · 文件已不在") + `</div>`
+      + `<div class="tagsrow">`
+      + d.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")
+      + `<button class="tagbtn" data-tags="${d.id}" title="编辑标签">＋</button>`
+      + `</div></div>`
+      + `<div class="pick">${box}</div>`
+      + `<button class="rm ghost" data-rm="${d.id}" title="从库中移除">×</button>`
+      + `</div>`;
+  }
 
   if (prefs.libDense !== false) {
     // 紧凑行: 勾选框 + 标题 + 标签 + 右侧次要信息, 操作悬停浮现
@@ -158,7 +214,7 @@ function renderLibBulk(total) {
     + `<button class="ghost" id="libBulkRm">移除</button>`;
 }
 
-/* 同步顶部的排序/密度控件显示 */
+/* 同步顶部的排序/密度/大屏控件显示 */
 function syncLibControls() {
   const sort = $("#libSort");
   if (sort) sort.value = prefs.libSort || "opened";
@@ -167,6 +223,13 @@ function syncLibControls() {
     const dense = prefs.libDense !== false;
     btn.textContent = dense ? "紧凑" : "舒适";
     btn.title = dense ? "当前紧凑列表，点击切换为舒适" : "当前舒适列表，点击切换为紧凑";
+    // 大屏是网格, 密度开关在那里没有意义
+    btn.style.display = libFull() ? "none" : "";
+  }
+  const full = $("#btnLibFull");
+  if (full) {
+    full.classList.toggle("on", libFull());
+    full.textContent = libFull() ? "退出大屏" : "大屏";
   }
 }
 
@@ -181,6 +244,8 @@ async function openLibDoc(id) {
   if (esP) { esP.close(); esP = null; }
   running = false; polishing = false;
   $("#btnRun").textContent = "开始翻译";
+  // 大屏是"挑文档"的视图, 挑完就该回到阅读区
+  if (libFull()) setLibFull(false);
   snapshotTab();
   // 已打开的文档后端直接激活(不重新解析), 300ms 内完成则不显示 busy。
   // 注意用浮动卡片而不是写右栏: 右栏是共享画布, 切标签时会被快照存档
@@ -375,6 +440,15 @@ $("#btnDense").onclick = () => {
   savePrefs();
   renderLibrary();
 };
+$("#btnLibFull").onclick = () => setLibFull(!libFull());
+/* Esc 退出大屏(与文件选择器的 Esc 不冲突: 那边自己先关) */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !libFull()) return;
+  if ($("#picker").classList.contains("on")) return;
+  if ($("#cfg").classList.contains("on")) return;
+  if ($("#dup").classList.contains("on")) return;
+  setLibFull(false);
+});
 
 $("#libList").addEventListener("change", async (e) => {
   const mv = e.target.closest("[data-move]");

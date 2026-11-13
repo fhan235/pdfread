@@ -445,3 +445,42 @@ def test_different_content_is_not_flagged(client, make_pdf):
     b = make_pdf("b.pdf", text="Totally different paper")
     assert client.post(f"/api/open?path={a}").status_code == 200
     assert client.post(f"/api/open?path={b}").status_code == 200
+
+def test_thumbnail_renders_caches_and_rejects_foreign_paths(client, make_pdf, tmp_path):
+    """封面缩略图: 只认文库内的 PDF, 结果落盘缓存。"""
+    from pdfread.paths import cache_dir
+
+    src = make_pdf("cover.pdf")
+    opened = client.post(f"/api/open?path={src}")
+    assert opened.status_code == 200
+    lib_id = opened.json()["lib"]
+
+    r = client.get(f"/api/thumb/{lib_id}.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+    cached = list((cache_dir() / "thumbs").glob("*.png"))
+    assert len(cached) == 1
+
+    # 第二次走缓存: 不再新增文件
+    assert client.get(f"/api/thumb/{lib_id}.png").status_code == 200
+    assert len(list((cache_dir() / "thumbs").glob("*.png"))) == 1
+
+    # 不在文库里的 id 一律拒绝(不能借此探测任意路径)
+    assert client.get("/api/thumb/999999.png").status_code == 404
+
+
+def test_thumbnail_skips_non_pdf_and_missing_files(client, tmp_path):
+    """EPUB/TXT 没有可渲染版面, 文件消失也不能 500 —— 前端退回占位。"""
+    from pdfread.library import Library
+    from pdfread.paths import config_dir
+
+    lib = Library(str(config_dir() / "library.db"))
+    txt = tmp_path / "note.txt"
+    txt.write_text("hello", encoding="utf-8")
+    txt_id = lib.upsert_document(str(txt), "note.txt")
+    gone_id = lib.upsert_document(str(tmp_path / "gone.pdf"), "gone.pdf")
+    lib.close()
+
+    assert client.get(f"/api/thumb/{txt_id}.png").status_code == 404
+    assert client.get(f"/api/thumb/{gone_id}.png").status_code == 404

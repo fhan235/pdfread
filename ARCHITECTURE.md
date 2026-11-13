@@ -42,7 +42,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 
 ## HTTP API 速查（server.py）
 
-阅读：`GET /api/page/{n}.svg`（默认）L816 · `GET /api/page/{n}.png` L838 · `GET /api/text/{n}` L859 · `GET /api/translate`(SSE) L867 · `GET /api/polish`(SSE) L943 · `POST /api/ask` L1051 · `POST /api/ask-stream`(SSE 流式) L1067 · `POST /api/translate-text`(划词翻译, 走缓存) L1094 · `POST /api/summary`(缓存) L1113 · `GET /api/raw` L1135
+阅读：`GET /api/page/{n}.svg`（默认）· `GET /api/page/{n}.png` · `GET /api/thumb/{lib_id}.png`（文库封面，落盘缓存）· `GET /api/text/{n}` · `GET /api/translate`(SSE) · `GET /api/polish`(SSE) · `POST /api/ask` · `POST /api/ask-stream`(SSE 流式) · `POST /api/translate-text`(划词翻译, 走缓存) · `POST /api/summary`(缓存) · `GET /api/raw`
 EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/{n}`(包内图片, SVG 加 CSP sandbox) L796
 文档管理：`GET /api/docs` · `POST /api/docs/close` · `GET /api/info` · `POST /api/open`(支持 `force=1` 跳过查重) · `POST /api/upload`(同) · `POST /api/open-url`(body 里 `force`) · `GET /api/browse` · `POST /api/roots`(加白名单) · `GET /api/progress`(打开任务进度轮询) · `GET /api/history` · `POST /api/history/remove`
 > 三个打开入口命中内容查重时返回 **409** `{duplicate, sha256, existing}`，不是错误而是等用户决策。
@@ -63,7 +63,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 上传文件 | `cache_dir()/uploads/` | uuid 文件名，不覆盖 |
 | 运行实例 | `cache_dir()/runtime.json` | `{pid, port}`，桌面版单实例探测 |
 | 更新工作区 | `cache_dir()/update/` | `pending.json` 更新回执、`update.log` 安装器日志、`staging-*` 解压出的新版本、`backup-*` 替换时的旧文件（下次检查时清理）；下载包在 `cache_dir()/downloads/` |
-| 前端偏好 | localStorage `pdfread.prefs` | theme/themeCustom/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/qaInH/expFmt/expSrc/italicSrc/efont/eline/efontFam/efontCustom/skipVersion/libDense/libSort |
+| 前端偏好 | localStorage `pdfread.prefs` | theme/themeCustom/font/layout/layoutPrev/zoom/lib/qa/toc/leftPct/libW/qaW/qaInH/expFmt/expSrc/italicSrc/efont/eline/efontFam/efontCustom/skipVersion/libDense/libSort/libFull |
 | 会话标签 | sessionStorage `pdfread.doc` | 当前标签 id |
 
 ## 前端地图（static/，无构建，多文件）
@@ -83,7 +83,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | `js/state.js` | 全局状态与 `$` 简写；页面心跳与 pagehide 上报 | `INFO`、`left/right`、`es/esP`、`fileSerial` |
 | `js/tabs.js` | 多文档标签 + 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`（含问答会话组 `qaSessions`、润色视图快照）；`addOrActivateTab()`；`init()` |
 | `js/pages.js` | 左栏懒加载（SVG/章节）、翻译 SSE、润色、滚动同步、目录、阅读进度 | `buildLeft()`（imgwrap+hlayer / echapter）；`run()`/`renderPage()`；`togglePolish()`；`tidy`/`esc`；`centerLeft()`；`scrollToPage()`；`renderTOC()` |
-| `js/library.js` | 文库侧栏（文件夹/标签/搜索/排序/密度/批量/移动/移除） | `LIB`/`libScope`/`libSel`（批量选中）；`renderLibrary()`；`docRow()`（紧凑行 33px / 舒适卡片 154px 两种密度）；`LIB_SORTS`/`libSorted()`；`renderLibBulk()`；`libPost()`；`openLibDoc()` |
+| `js/library.js` | 文库（文件夹/标签/搜索/排序/密度/大屏网格/批量/移动/移除） | `LIB`/`libScope`/`libSel`（批量选中）；`renderLibrary()`；`docRow()`（紧凑行 33px / 舒适卡片 154px 两种密度）；`LIB_SORTS`/`libSorted()`；`renderLibBulk()`；`libFull()`/`setLibFull()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
 | `js/links.js` | 文内链接：引用/交叉引用点击跳转 + 返回 | `linkHTML()`（热区，纯函数）；`loadLinks()`；`jumpToLink()`/`navBackGo()`；`navBack`（按文档的返回栈）；`syncLinkBack()`（浮动返回按钮） |
 | `js/mathtex.js` | 数学公式渲染：薄封装 KaTeX（本地自托管，离线可用） | `texRender(src, display)` 是唯一出口；`TEX_MACROS`（补 LLM 常用而 KaTeX 没有的命令）；`texNormalize()` 剥掉 `\begin{equation}`/`\label{}` 等 KaTeX 不认的文档级语法；KaTeX 本体在 `static/vendor/katex/` |
@@ -115,7 +115,9 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **导入查重**：三个入口（`/api/open`、`/api/upload`、`/api/open-url`）在解析前先算文件 **SHA-256**（`file_sha256()`，分块读，跑在 `to_thread` 里不阻塞事件循环），命中 `documents.sha256` 则返回 **409 + 已有记录**，前端弹窗给「打开已有的 / 仍然导入一份 / 取消」。`force=1` 跳过检查（用户已确认）。**同路径不算重复**（那是再次打开同一文件，不该打扰）；上传命中时会先删掉刚落盘的副本再返回，不留垃圾。只按内容哈希判定，字节不同就绝不报重复（零误报）；哈希为空（旧记录、读文件失败）一律不参与判重，`/api/library/open` 会顺带回填哈希让老记录逐步获得判重能力。
 - **顶栏布局**：控件按用途包在 `header .grp` 里，**组内 `inline-flex` 不换行、换行以整组为单位**，组间用 `.grp + .grp::before` 画细竖线。窄窗口靠 `style.css` 末尾的媒体查询逐级让位（1520 缩字号滑块 → 1400 隐字号 → 1320 隐缩放 → 1100 隐同步与 label），把顶栏锁在单行 47px；让位的都是设置面板或快捷键另有入口的低频控件。**媒体查询必须放文件末尾**：同优先级下后出现的规则胜出，放前面会被后面的 `.fontctl`/`.zoomctl` 基础规则覆盖掉（踩过）。
 - **文库白名单**：`library.db` 里的路径视为用户已授权；普通路径仍需在 roots 白名单内（`_safe_resolve`）。
-- **文库列表密度**：默认**紧凑行（33px/篇）**，一屏约 11 篇；`prefs.libDense=false` 切回舒适卡片（154px/篇，一屏 2.7 篇）。省出高度的关键是：标题单行省略 + 操作按钮悬停才浮现（`.rowops` 平时 `display:none`）+ 文件夹下拉从每行移到批量条。侧栏窄时用**容器查询**（`#libMain` 声明 `container-type: inline-size`）按侧栏实际宽度隐藏日期/划线数，把空间让给标题 —— 注意是容器宽而非窗口宽，媒体查询在这里不适用。排序在前端做（`LIB_SORTS`，服务端固定按 `last_opened` 返回）。批量选中 `libSel` 在每次 `renderLibrary()` 时会剔除当前筛选范围外的 id，避免误操作到看不见的文档。
+- **文库三种呈现**：侧栏**紧凑行 33px**（默认，快速定位）/ 侧栏**舒适卡片 154px** / **大屏网格**（`body.libfull`，铺满整窗、带首页封面，用于浏览和整理）。大屏由 `setLibFull()` 切换，只加一个 body class：`main`/`#qaPanel`/分割条让位，`#libView` 改为横向（文件夹标签在左列），`#libList` 变 grid（`auto-fill minmax(190px,1fr)`，实测 1024–1920 自适应 3–8 列，卡片宽稳定在 194–249px 不被压扁）；退出即还原，侧栏那套规则一行没动。大屏下点卡片会自动退出大屏回到阅读区。注意 `syncLibControls()` 必须在 `loadLibrary()` **之前**调用 —— 后者是异步的，放其后会被旧状态覆盖。
+- **封面缩略图**：`GET /api/thumb/{lib_id}.png` → `render_thumb()` 渲染首页。与 `render_page` 不同**不校验 stamp**（文库文档通常没打开，没有 stamp 可比），改为按 `(lib_id, mtime, size)` 落盘缓存到 `cache_dir()/thumbs/`，文件变了自然换 key；写入先写 `.part` 再 `replace`，并发请求不会读到半截图片；`_trim_thumbs()` 保留最近 400 张。只接受**文库内的 PDF**（那些路径是用户主动导入的，视为已授权），EPUB/TXT 与丢失的文件返回 404，前端 `onerror` 移除 `<img>` 后露出垫在下层的扩展名占位。`<img loading="lazy">` 避免一次性拉完整库。
+- **文库列表密度**：省出高度的关键是：标题单行省略 + 操作按钮悬停才浮现（`.rowops` 平时 `display:none`）+ 文件夹下拉从每行移到批量条。侧栏窄时用**容器查询**（`#libMain` 声明 `container-type: inline-size`）按侧栏实际宽度隐藏日期/划线数，把空间让给标题 —— 注意是容器宽而非窗口宽，媒体查询在这里不适用。排序在前端做（`LIB_SORTS`，服务端固定按 `last_opened` 返回）。批量选中 `libSel` 在每次 `renderLibrary()` 时会剔除当前筛选范围外的 id，避免误操作到看不见的文档。
 - **单实例**：桌面版启动时读 `runtime.json` 探测已有实例，有则激活其窗口直接退出。
 - **关页看门狗**：浏览器回退模式下页面每 5s 心跳；pagehide 启动 8s 退出倒计时，心跳消失超 180s 也兜底退出。
 - **版本更新**：网页端 `releases/latest` 302 优先（不占 API 配额）+ API 富化（两通道版本一致才合并）；结果缓存 6 小时；下载地址必须等于本仓库该版本 Release 的固定地址，并用同一 Release 的 `SHA256SUMS.txt`（CI 生成）校验，缺校验文件则拒绝。

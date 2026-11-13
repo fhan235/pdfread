@@ -38,7 +38,7 @@ from fastapi.responses import (
 
 from .library import Library
 from .pdfworker import (inspect_pdf, page_links, page_words, render_page,
-                        render_page_svg)
+                        render_page_svg, render_thumb)
 from .paths import cache_dir, config_dir, static_dir, uploads_dir
 from .translate import PROVIDERS, Cache, TransConfig, Translator
 
@@ -937,6 +937,67 @@ async def page_png(num: int, dpi: int = 110, doc: str = "") -> Response:
         media_type="image/png",
         headers={"Cache-Control": "private, max-age=3600" if doc else "no-store"},
     )
+
+
+@app.get("/api/thumb/{lib_id}.png")
+async def library_thumb(lib_id: int) -> Response:
+    """文库封面缩略图(首页)。
+
+    只接受文库里的文档 —— 那些路径是用户主动导入的, 视为已授权;
+    仍校验扩展名与文件存在, 防数据库被篡改后读到任意文件。
+    结果按 (文库 id, mtime, size) 落盘缓存: 文件没变就直接回缓存,
+    不必每次滚动都唤醒进程池重渲染。
+    """
+    entry = _library().document_path(lib_id)
+    if entry is None:
+        raise HTTPException(404, "文档不在文库中")
+    p = Path(entry[0]).expanduser().resolve()
+    # EPUB/TXT 没有可渲染的版面, 前端会退回图标占位
+    if p.suffix.lower() != ".pdf" or not p.is_file():
+        raise HTTPException(404, "无可用缩略图")
+    try:
+        st = p.stat()
+    except OSError:
+        raise HTTPException(404, "无可用缩略图") from None
+
+    cache = cache_dir() / "thumbs"
+    cache.mkdir(parents=True, exist_ok=True)
+    key = f"{lib_id}-{st.st_mtime_ns}-{st.st_size}.png"
+    hit = cache / key
+    if hit.is_file():
+        return FileResponse(hit, media_type="image/png",
+                            headers={"Cache-Control": "private, max-age=86400"})
+
+    try:
+        png = await asyncio.get_running_loop().run_in_executor(
+            _executor(), render_thumb, str(p), 240)
+    except Exception:
+        await _restart_executor()
+        raise HTTPException(404, "无法生成缩略图") from None
+
+    try:
+        # 先写临时文件再 replace: 并发请求同一文档时不会读到半截图片
+        tmp = cache / f".{key}.part"
+        tmp.write_bytes(png)
+        tmp.replace(hit)
+        _trim_thumbs(cache)
+    except OSError:
+        pass   # 缓存写失败不影响这次返回
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
+def _trim_thumbs(cache: Path, keep: int = 400) -> None:
+    """限制缩略图缓存数量, 顺带清掉同一文档的旧版本。"""
+    try:
+        files = sorted(cache.glob("*.png"), key=lambda f: f.stat().st_mtime)
+    except OSError:
+        return
+    for f in files[:-keep]:
+        try:
+            f.unlink()
+        except OSError:
+            pass
 
 
 @app.get("/api/text/{num}")
