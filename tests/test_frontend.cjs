@@ -17,7 +17,8 @@ function setup() {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
-      value: '', innerHTML: '', textContent: '', disabled: false, style: {},
+      value: '', innerHTML: '', textContent: '', disabled: false,
+      style: { setProperty() {}, removeProperty() {} },
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
       addEventListener() {}, querySelectorAll() { return []; }, appendChild() {},
       querySelector() { return null; }, remove() {},
@@ -27,8 +28,11 @@ function setup() {
   const context = vm.createContext({
     document: { querySelector: element, querySelectorAll: () => [], addEventListener() {},
       getElementById: id => element('#' + id), createElement: () => element('new'),
-      body: { classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } } } },
-    window: { addEventListener() {} },
+      documentElement: { style: { setProperty() {}, removeProperty() {} } },
+      body: { classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+        style: { setProperty() {}, removeProperty() {} } } },
+    // 记录注册到 window 的监听器, 便于在测试里直接派发事件
+    window: { addEventListener(t, f) { (this._on ||= {})[t] = f; } },
     sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
     localStorage: { getItem() { return null; }, setItem() {} },
     setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
@@ -382,4 +386,35 @@ test('jumping to a reference and going back restores the reading position', () =
   run('jumpToLink(2, 594, 198)');   // 图注在 3/4 处, 图顶在 1/4 处
   assert.equal(pane.scrollTop, 1000 + 250 - 48);
   assert.equal(mark.style.top, '75.000%');
+});
+
+test('ctrl+wheel zoom keeps the reading position without scrolling', () => {
+  const { context, element, run } = setup();
+  const wheel = context.window._on && context.window._on.wheel;
+  assert.ok(wheel, 'wheel 监听器已注册');
+  // 左栏第 5 页: 几何随当前缩放变化, 模拟浏览器重排后的新尺寸
+  const leftEl = element('#left');
+  const pg = element('#L5');
+  pg.id = 'L5';
+  const z = () => run('prefs.zoom') || 1;
+  Object.defineProperty(pg, 'offsetTop', { get: () => Math.round(400 * z()) });
+  Object.defineProperty(pg, 'offsetHeight', { get: () => Math.round(800 * z()) });
+  leftEl.children = [pg];
+  leftEl.contains = () => true;
+  leftEl.scrollTop = 600;             // 读到第 5 页的 1/4 处
+  element('#right').scrollTop = 450;  // 另一栏不许被动
+  let prevented = 0;
+  const ev = { ctrlKey: true, metaKey: false, deltaY: -120, deltaMode: 0,
+               target: {}, preventDefault() { prevented++; } };
+  wheel(ev);                          // 向上滚两档: 放大到 120%
+  assert.equal(prevented, 1);         // 浏览器默认的滚动/整页缩放被拦掉
+  assert.equal(run('prefs.zoom'), 1.2);
+  // 锚点恢复: 仍是第 5 页的 1/4 处(新几何下 480 + 0.25*960), 而不是留在原 scrollTop
+  assert.equal(leftEl.scrollTop, 720);
+  assert.equal(element('#right').scrollTop, 450);
+  // 光标不在 PDF 栏: 只拦整页缩放, 不改缩放值
+  leftEl.contains = () => false;
+  wheel(ev);
+  assert.equal(run('prefs.zoom'), 1.2);
+  assert.equal(prevented, 2);
 });

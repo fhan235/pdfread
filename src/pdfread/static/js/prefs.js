@@ -552,10 +552,24 @@ function centerLeft() {
   }
 }
 
-function setZoom(v) {
+/* keepPos(滚轮缩放): 缩放改变版面高度, 浏览器会自动挪动 scrollTop 保持锚点
+   (看起来就是边放大边滚动), 滚动同步还会把它镜像到另一栏。
+   因此先记下当前顶部的(页码, 页内比例), 缩放后强制重排并滚回同一锚点,
+   抑制窗口挡住后续回弹事件 —— 只放大, 不滚动 */
+function setZoom(v, keepPos) {
+  const anchor = keepPos && topPage(left);   // {n, frac}; 无文档/空栏时为 null
   prefs.zoom = Math.min(2.5, Math.max(0.6, Math.round(v * 10) / 10));
   savePrefs();
   applyPrefs();
+  if (anchor && anchor.n) {
+    const el = document.getElementById("L" + anchor.n);
+    if (el) {
+      // 读 offsetTop/offsetHeight 即强制完成重排, 拿到新缩放下的几何
+      suppress.left = suppress.right = performance.now() + 400;
+      lastTop.left = lastTop.right = anchor.n;
+      left.scrollTop = el.offsetTop + Math.max(0, anchor.frac) * el.offsetHeight;
+    }
+  }
   setTimeout(() => centerLeft(), 60);   // SVG 矢量图无需重取, 只需居中
 }
 $("#zoomIn").onclick = () => setZoom((prefs.zoom || 1) + 0.1);
@@ -563,17 +577,20 @@ $("#zoomOut").onclick = () => setZoom((prefs.zoom || 1) - 0.1);
 $("#zoomVal").onclick = () => setZoom(1);
 
 /* Ctrl/Cmd + 滚轮: 只缩放 PDF 栏; 同时拦掉浏览器整页缩放, 避免两栏比例错位。
-   触控板捏合会产生带 ctrlKey 的高频小步进 wheel 事件, 累加换算成 10% 档位 */
+   触控板捏合会产生带 ctrlKey 的高频小步进 wheel 事件, 累加换算成 10% 档位;
+   一次事件里的多个档位合并成一次 setZoom, 避免重复重排/恢复 */
 let wheelAcc = 0;
 window.addEventListener("wheel", (e) => {
   if (!e.ctrlKey && !e.metaKey) return;
   e.preventDefault();
   if (!left.contains(e.target)) return;   // 光标不在 PDF 栏时仅拦截整页缩放
   wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : 1);  // 行模式换算成像素
+  let step = 0;
   while (Math.abs(wheelAcc) >= 50) {
-    setZoom((prefs.zoom || 1) + (wheelAcc < 0 ? 0.1 : -0.1));
+    step += wheelAcc < 0 ? 0.1 : -0.1;
     wheelAcc += wheelAcc < 0 ? 50 : -50;
   }
+  if (step) setZoom((prefs.zoom || 1) + step, true);
 }, { passive: false });
 
 $("#btnExport").onclick = doExport;
