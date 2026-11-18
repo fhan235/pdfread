@@ -187,6 +187,28 @@ def set_parse(values: dict) -> dict:
     return get_parse()
 
 
+SUMMARY_PROMPT_MAX = 8000
+
+
+def get_summary_prompt() -> str:
+    """自定义速读摘要提示词, 空串表示用内置默认(translate.SUMMARY_PROMPT)。"""
+    val = load().get("summary_prompt", "")
+    return val.strip() if isinstance(val, str) else ""
+
+
+def set_summary_prompt(value: str) -> str:
+    """写入或清除自定义摘要提示词(空串 = 恢复默认)。"""
+    with _LOCK:
+        data = load()
+        value = (value or "").strip()
+        if value:
+            data["summary_prompt"] = value[:SUMMARY_PROMPT_MAX]
+        else:
+            data.pop("summary_prompt", None)
+        save(data)
+    return get_summary_prompt()
+
+
 def get_history() -> list[dict]:
     value = load().get("history", [])
     return value if isinstance(value, list) else []

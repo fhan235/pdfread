@@ -268,6 +268,7 @@ async function openCfg() {
     $("#cfgHint").className = "hint bad";
     return;
   }
+  loadSumPrompt();
   $("#cfgProvider").innerHTML = CFG.items.map((it) =>
     `<option value="${esc(it.provider)}"${it.provider === CFG.current ? " selected" : ""}>`
     + `${esc(it.provider)} — ${esc(it.model)}</option>`).join("");
@@ -387,6 +388,46 @@ $("#cfg").addEventListener("click", (e) => {
 $("#cfgKey").addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveCfg();
 });
+/* ---------------- 速读摘要提示词(可自定义, 空 = 内置默认) ---------------- */
+let sumPromptDefault = "";
+
+function syncSumBadge() {
+  const custom = $("#sumPrompt").value.trim()
+    && $("#sumPrompt").value.trim() !== sumPromptDefault.trim();
+  const b = $("#sumBadge");
+  b.textContent = custom ? "自定义" : "默认";
+  b.className = "badge" + (custom ? " on" : "");
+}
+
+function loadSumPrompt() {
+  sumPromptDefault = CFG.summary_prompt_default || "";
+  $("#sumPrompt").value = CFG.summary_prompt || sumPromptDefault;
+  syncSumBadge();
+}
+
+async function saveSumPrompt(value) {
+  $("#sumHint").textContent = "保存中…";
+  try {
+    const r = await libPost("/api/settings", { summary_prompt: value });
+    if (!r.ok) throw new Error(await errText(r));
+    $("#sumHint").textContent = "已保存，下次生成摘要时生效（会重新生成，不读旧缓存）";
+    $("#sumHint").className = "hint ok";
+    syncSumBadge();
+  } catch (e) {
+    $("#sumHint").textContent = "保存失败：" + e;
+    $("#sumHint").className = "hint bad";
+  }
+}
+$("#btnSumSave").onclick = () => {
+  const v = $("#sumPrompt").value.trim();
+  saveSumPrompt(v === sumPromptDefault.trim() ? "" : v);
+};
+$("#btnSumReset").onclick = () => {
+  $("#sumPrompt").value = sumPromptDefault;
+  saveSumPrompt("");
+};
+$("#sumPrompt").addEventListener("input", syncSumBadge);
+
 /* ---------------- 论文模式设置 ---------------- */
 const PM_BOXES = {
   cbFig: "translate_figtext",

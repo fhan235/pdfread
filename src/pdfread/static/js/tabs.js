@@ -13,7 +13,7 @@ function renderTabs() {
   bar.classList.toggle("on", tabs.length > 0);
   bar.innerHTML = tabs.map((t) =>
     `<div class="tab${t.id === activeTab ? " on" : ""}" data-tab="${t.id}"`
-    + ` title="${esc(tabName(t))}">`
+    + ` draggable="true" title="${esc(tabName(t))}（可拖拽调整顺序）">`
     + (t.running ? `<span class="dot">●</span>` : "")
     + `<span class="nm">${esc(tabName(t))}</span>`
     + `<button class="x" data-x="${t.id}" title="关闭该文档">×</button></div>`
@@ -26,6 +26,60 @@ $("#tabbar").addEventListener("click", (e) => {
   if (x) { e.stopPropagation(); closeTab(x.dataset.x); return; }
   const tab = e.target.closest(".tab");
   if (tab) switchTab(tab.dataset.tab);
+});
+
+/* ---------------- 标签拖拽排序 ---------------- */
+/* 顺序只在会话内有效(重启后按服务端 /api/docs 的顺序恢复),
+   因此不用落盘, 也不需要通知服务端 */
+let dragTabId = null;
+
+function clearTabDrop() {
+  $("#tabbar").querySelectorAll(".tab").forEach((t) =>
+    t.classList.remove("dragging", "drop-before", "drop-after"));
+}
+
+/* 把 srcId 标签移动到 dstId 标签的前/后 */
+function moveTab(srcId, dstId, after) {
+  const from = tabs.findIndex((t) => t.id === srcId);
+  let to = tabs.findIndex((t) => t.id === dstId);
+  if (from < 0 || to < 0 || from === to) return;
+  const [moved] = tabs.splice(from, 1);
+  if (from < to) to--;
+  tabs.splice(after ? to + 1 : to, 0, moved);
+  renderTabs();
+}
+
+$("#tabbar").addEventListener("dragstart", (e) => {
+  const tab = e.target.closest(".tab");
+  if (!tab) { e.preventDefault(); return; }
+  dragTabId = tab.dataset.tab;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", dragTabId);   // Firefox 需要 setData 才会进入拖拽
+  tab.classList.add("dragging");
+});
+$("#tabbar").addEventListener("dragover", (e) => {
+  if (!dragTabId) return;
+  const tab = e.target.closest(".tab");
+  if (!tab || tab.dataset.tab === dragTabId) return;
+  e.preventDefault();   // 必须 preventDefault 才允许落下
+  e.dataTransfer.dropEffect = "move";
+  const r = tab.getBoundingClientRect();
+  clearTabDrop();
+  tab.classList.add(e.clientX > r.left + r.width / 2 ? "drop-after" : "drop-before");
+});
+$("#tabbar").addEventListener("drop", (e) => {
+  if (!dragTabId) return;
+  e.preventDefault();
+  const tab = e.target.closest(".tab");
+  clearTabDrop();
+  if (!tab || tab.dataset.tab === dragTabId) { dragTabId = null; return; }
+  const r = tab.getBoundingClientRect();
+  moveTab(dragTabId, tab.dataset.tab, e.clientX > r.left + r.width / 2);
+  dragTabId = null;
+});
+$("#tabbar").addEventListener("dragend", () => {
+  dragTabId = null;
+  clearTabDrop();
 });
 
 function snapshotTab() {
@@ -92,7 +146,11 @@ function restoreTab(t) {
 }
 
 function switchTab(id) {
-  if (id === activeTab || !tabs.some((t) => t.id === id)) return;
+  if (!tabs.some((t) => t.id === id)) return;
+  // 书架模式下标签栏仍可见: 点任一标签 = 退出书架, 进入该文档的阅读视图
+  // (当前标签也要处理, 否则在书架里点正在读的那个标签会毫无反应)
+  if (isShelf()) setShelf(false);
+  if (id === activeTab) return;
   const wasRunning = running || polishing;
   if (es) { es.close(); es = null; }
   if (esP) { esP.close(); esP = null; }

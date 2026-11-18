@@ -32,7 +32,7 @@ PyMuPDF 解析在独立进程池里跑（崩溃隔离）。
 | `pdfworker.py` | 进程池内执行：解析（带 stamp 防文件中途变更）、渲染 PNG/SVG、词坐标、文内链接 | `inspect_pdf` / `render_page_svg` / `page_words` / `page_links` |
 | `translate.py` | LLM 调用：翻译/润色/问答/摘要 + SQLite 缓存 | `PROVIDERS`（含 `models` 候选列表）；`Translator`（`_chat` 是统一调用点，429/5xx 重试 3 次） |
 | `library.py` | 文库 + 高亮的 SQLite 持久化 | `Library`；表结构在 `_SCHEMA`；`VALID_COLORS` |
-| `settings.py` | 本地配置（API Key 0600、解析选项、打开历史、更新代理、按服务的 model/base_url/qa_model） | `profile()` / `update_translation()` / `get_parse()` / `add_history()` / `set_proxy()` |
+| `settings.py` | 本地配置（API Key 0600、解析选项、打开历史、更新代理、按服务的 model/base_url/qa_model、自定义摘要提示词） | `profile()` / `update_translation()` / `get_parse()` / `add_history()` / `set_proxy()` / `get_summary_prompt()` |
 | `paths.py` | 跨平台路径：缓存/配置/上传/白名单根目录、图标资源、安装位置 | `cache_dir()` `config_dir()` `uploads_dir()`；`asset_icon()`；`install_target()`（一键更新定位） |
 | `epub.py` | EPUB 原生解析（章节即页） | `inspect_epub` / `read_resource`；解压大小上限防 zip bomb；`_sanitize` 去脚本/事件/内联样式/外链图 |
 | `txt.py` | TXT 原生解析（编码检测、章节识别、按字符切块） | `inspect_txt` |
@@ -85,7 +85,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 文件 | 职责 | 关键状态/函数 |
 |---|---|---|
 | `js/state.js` | 全局状态与 `$` 简写；页面心跳与 pagehide 上报 | `INFO`、`left/right`、`es/esP`、`fileSerial` |
-| `js/tabs.js` | 多文档标签 + 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`（含问答会话组 `qaSessions`、润色视图快照）；`addOrActivateTab()`；`init()` |
+| `js/tabs.js` | 多文档标签（可拖拽排序）+ 启动恢复 | `tabs[]`/`activeTab`；`snapshotTab`/`restoreTab`（含问答会话组 `qaSessions`、润色视图快照）；`moveTab()` 拖拽排序（HTML5 DnD，顺序仅会话内有效）；`switchTab` 在书架模式下先退出书架；`addOrActivateTab()`；`init()` |
 | `js/pages.js` | 左栏懒加载（SVG/章节）、翻译 SSE、润色、滚动同步、目录、阅读进度 | `buildLeft()`（imgwrap+hlayer / echapter）；`run()`/`renderPage()`；`togglePolish()`；`tidy`/`esc`；`centerLeft()`；`scrollToPage()`；`renderTOC()` |
 | `js/library.js` | 文库（文件夹/标签/搜索/排序/列表·详情/书架/批量/移动/移除） | `LIB`/`libScope`/`libSel`（批量选中）；`renderLibrary()`；`docRow()`（三种呈现分支）；`LIB_SORTS`/`libSorted()`；`renderLibBulk()`；`isShelf()`/`setShelf()`；`libPost()`；`openLibDoc()` |
 | `js/highlight.js` | 划线高亮：拖选→预览→确认，双击选词 | `marksByDoc`/`wordsByDoc`；`hitWord`/`selectionRects`；`discardPending`；`recoverLib`（lib 缺失自动恢复） |
@@ -111,6 +111,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 - **自定义主题**：`theme=custom` 时 8 个 CSS 变量（bg/panel/line/fg/dim/accent/ok/warn）以 inline style 覆盖，按背景亮度自适应深浅组件；首次进入以当前主题为底版快照。默认主题是浅色（`prefs.theme="light"`，`index.html` 的 `<body class="light">` 避免首屏闪深色）。
 - **标签页**：切换=快照 innerHTML+滚动位置+qaHist+润色视图；翻译流切换即停（缓存在服务端，重翻秒出）。
 - **AI 问答**：方案 A 全文直塞，超 60000 字符（`QA_BUDGET`）掐中段留首尾（首 70% + 尾 30%）；不走缓存；历史只允许 user/assistant 角色，单条 ≤8000 字符、≤20 条。速读摘要结果按 (全文, `summary_model`) 缓存。
+- **摘要提示词自定义**：默认用 `translate.SUMMARY_PROMPT`；用户可在设置面板「速读摘要」区块改写（存 `config.json` 的 `summary_prompt`，空串 = 默认，上限 8000 字符，`GET/POST /api/settings` 读写）。`Translator.set_summary_prompt()` 在每次摘要前注入——缓存命名空间 `summary_model` 含提示词哈希，换提示词自动重新生成，不会命中旧缓存。
 - **数学输出格式**：`QA_PROMPT` / `SUMMARY_PROMPT` 共用 `MATH_RULE`，**强制模型把数学一律写成 LaTeX**（行内 `$…$`、独立 `$$…$$`，变量与下标也要包）。没有这条时模型只给独立公式加 `$$`，行内符号写成裸文本（`d²_hat{q}`、`λ_bound`），既进不了 KaTeX，还会把 `hat{}` 这种命令名直接显示出来 —— 渲染器再好也救不了没被标记成公式的文本。规则里同时禁用 Unicode 上下标与 `\begin{equation}`/`\label{}`。
 - **问答多会话**：同一文档可开多个对话（`qaSessions`，面板顶部**横向标签栏**切换，样式与顶部文档标签栏 `#tabbar` 同一套语言）。面板默认仅 340px 宽，所以标签 `flex: 1 1 auto` 可收缩，收到 `min-width` 后整条横向滚动、`＋` 固定在右侧不滚走（当前标签 `flex-grow:1.6` 优先拿空间并保底 60px；完整标题放 `title` 兜底）。`qaHist` 恒指向当前会话的历史数组（不可重新赋值成副本）。**对话持久化在 `library.db` 的 `qa_sessions` 表**（按文库文档 id 绑定），刷新页面、重开应用都还在；标签快照只作为切标签时的内存缓存（`t.qaLib` 记录归属，换文档即失效重拉）。新建会话用递减负数作临时 id，首次 `qaPersist()` 后换成服务端 id —— 否则每次保存都会重复插入。落库时机是「一问一答完整之后」，不是每个增量 token。未入库的文档（`INFO.lib` 为空）退化为纯内存会话，问答照常可用。每文档最多 20 个对话、每对话 200 条消息、单条 20000 字符，超出丢最旧的。同一时刻只允许一个请求在跑，回答只写进发起时捕获的标签+会话，等待中的会话在标签上显示 `●`。
 - **问答面板的垂直空间**：面板窄且高度有限，**常驻横幅会显著挤占对话区**。原先那条"基于当前文档全文…"的说明固定占 52px（三行），现改为：长说明走 `.qaempty` 空状态（放在 `#qaList` 内部，有消息后 `addQaBubble` 自动移除），临时提示走 `qaStatus()`（`#qaHint` 平时 `display:none`，有消息才出现、3 秒后自动消失）。对话区占比由 75% 提到 81%。
@@ -137,7 +138,7 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 | 需求 | 位置 |
 |---|---|
 | 加翻译服务 | `translate.py` `PROVIDERS` 加一行（`models` 是界面下拉的候选列表） |
-| 改翻译/润色/问答/摘要行为 | 对应 PROMPT（`translate.py` 顶部的 `SYSTEM_PROMPT`/`POLISH_PROMPT`/`QA_PROMPT`/`SUMMARY_PROMPT`，数学格式要求在共用的 `MATH_RULE`）——翻译/润色改后要 bump `cache_model`/`polish_model` 的版本串；摘要的 `summary_model` 已绑定 `SUMMARY_PROMPT` 哈希，自动失效 |
+| 改翻译/润色/问答/摘要行为 | 对应 PROMPT（`translate.py` 顶部的 `SYSTEM_PROMPT`/`POLISH_PROMPT`/`QA_PROMPT`/`SUMMARY_PROMPT`，数学格式要求在共用的 `MATH_RULE`）——翻译/润色改后要 bump `cache_model`/`polish_model` 的版本串；摘要的 `summary_model` 绑定实际生效的提示词哈希（含用户自定义），自动失效 |
 | 加主题 | `style.css` 加变量块（仿 `body.theme-paper`）+ `prefs.js` 的 `THEME_ORDER/NAMES` + index.html 的 segTheme 按钮 |
 | 补公式语法 | 一般不用动（KaTeX 覆盖面足够）；LLM 常用而 KaTeX 没有的命令加到 `js/mathtex.js` 的 `TEX_MACROS`，KaTeX 不认的文档级环境在 `texNormalize()` 里剥掉；样式见 `style.css`「数学公式」区块。升级 KaTeX：替换 `static/vendor/katex/` 下的 `katex.min.{js,css}` 与 `fonts/*.woff2` |
 | 加划线颜色 | `library.py` `VALID_COLORS` + `style.css` `.hl` 样式 + index.html `#hlConfirm`/`#hlPop` 加按钮 |
@@ -150,8 +151,8 @@ EPUB/TXT：`GET /api/chapter/{n}`(净化章节 HTML) L783 · `GET /api/epub-res/
 ## 测试
 
 ```bash
-pip install -e '.[test]' && python -m pytest -q     # 后端 192 项
-node --test tests/test_frontend.cjs                 # 前端 21 项（需 Node 22+）
+pip install -e '.[test]' && python -m pytest -q     # 后端 193 项
+node --test tests/test_frontend.cjs                 # 前端 23 项（需 Node 22+）
 ```
 
 - `tests/conftest.py`：`client` fixture（TestClient + 临时目录）、`make_pdf` 合成 PDF

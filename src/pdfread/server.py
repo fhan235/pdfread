@@ -817,7 +817,8 @@ async def upload(file: UploadFile = File(...), skip_references: bool = True,
 @app.get("/api/settings")
 async def get_settings() -> dict:
     """返回可配置项与各服务密钥的"是否已配置"状态(不返回密钥内容)。"""
-    from .settings import configured, get_proxy, profile
+    from .settings import configured, get_proxy, profile, get_summary_prompt
+    from .translate import SUMMARY_PROMPT
 
     done = configured()
     items = []
@@ -841,7 +842,9 @@ async def get_settings() -> dict:
     cfg: TransConfig | None = STATE["cfg"]
     return {"current": cfg.provider if cfg else "", "items": items,
             "proxy": os.environ.get("PDFREAD_PROXY", "").strip() or get_proxy(),
-            "proxy_from_env": bool(os.environ.get("PDFREAD_PROXY", "").strip())}
+            "proxy_from_env": bool(os.environ.get("PDFREAD_PROXY", "").strip()),
+            "summary_prompt": get_summary_prompt(),
+            "summary_prompt_default": SUMMARY_PROMPT}
 
 
 @app.post("/api/settings")
@@ -879,6 +882,12 @@ async def set_settings(payload: dict, doc: str = "") -> dict:
         raise HTTPException(400, "设置值必须为字符串")
     if key is not None and not PROVIDERS[provider]["key_env"]:
         raise HTTPException(400, "该服务无需密钥")
+    summary_prompt = payload.get("summary_prompt")
+    if summary_prompt is not None:
+        if not isinstance(summary_prompt, str):
+            raise HTTPException(400, "设置值必须为字符串")
+        from .settings import set_summary_prompt
+        set_summary_prompt(summary_prompt)   # 空串 = 恢复默认
     try:
         cfg = replace(old, provider=provider, model=model.strip(), base_url=base_url.strip())
     except ValueError as exc:
@@ -1403,6 +1412,9 @@ async def summary_doc(payload: dict) -> dict:
         tr = Translator(cfg, STATE["cache"])
     except Exception as e:
         raise HTTPException(400, str(e))
+    # 用户自定义的摘要提示词(空串 = 内置默认), 换提示词会换缓存命名空间
+    from .settings import get_summary_prompt
+    tr.set_summary_prompt(get_summary_prompt())
     text = _fulltext(current)
     key = Cache.key(text, tr.summary_model, "zh")
     hit = STATE["cache"].get_many([key]).get(key)

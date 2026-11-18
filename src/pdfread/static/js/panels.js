@@ -137,7 +137,9 @@ async function qaLoadDoc() {
 /* 标签内缓存: 切标签时不必重新请求 */
 function qaLoadTab(t) {
   const lib = (INFO && INFO.lib) || 0;
-  if (t && t.qaSessions && t.qaLib === lib) {
+  // 空数组也要走下方重建: 快照可能在 qaLoadTab 首次运行前写入(空会话),
+  // 直接采用会取不到当前会话
+  if (t && t.qaSessions && t.qaSessions.length && t.qaLib === lib) {
     qaSessions = t.qaSessions;
     const s = qaSessions.find((x) => x.id === t.qaSid) || qaSessions[0];
     qaSid = s.id;

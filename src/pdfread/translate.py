@@ -252,10 +252,23 @@ class Translator:
         self.cache_model = "\x00".join((self.base_url, self.model, hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(), "v2"))
         # 润色结果独立命名空间, 与逐段翻译缓存互不干扰
         self.polish_model = "polish\x00" + "\x00".join((self.base_url, self.model, hashlib.sha256(POLISH_PROMPT.encode()).hexdigest(), "v1"))
-        # 摘要同理: 必须带 SUMMARY_PROMPT 的哈希, 否则改了摘要提示词
-        # (如新增数学格式要求)旧缓存仍会命中, 用户永远看不到新格式
-        self.summary_model = "summary\x00" + "\x00".join((self.base_url, self.model, hashlib.sha256(SUMMARY_PROMPT.encode()).hexdigest(), "v1"))
+        # 摘要同理: 必须带提示词的哈希, 否则改了摘要提示词
+        # (如新增数学格式要求、用户自定义提示词)旧缓存仍会命中,
+        # 用户永远看不到新格式
+        self._summary_prompt = SUMMARY_PROMPT
+        self.summary_model = self._summary_key(SUMMARY_PROMPT)
         self._sem = asyncio.Semaphore(cfg.concurrency)
+
+    def _summary_key(self, prompt: str) -> str:
+        return "summary\x00" + "\x00".join((
+            self.base_url, self.model,
+            hashlib.sha256(prompt.encode()).hexdigest(), "v1"))
+
+    def set_summary_prompt(self, prompt: str) -> None:
+        """自定义速读提示词: 换提示词必须同时换缓存命名空间。"""
+        prompt = (prompt or "").strip() or SUMMARY_PROMPT
+        self._summary_prompt = prompt
+        self.summary_model = self._summary_key(prompt)
 
     def _pack(self, texts: list[str]) -> list[list[int]]:
         """把段落按字符预算打包成若干批, 返回下标分组。"""
@@ -293,10 +306,11 @@ class Translator:
             return await self._chat(client, messages)
 
     async def summarize(self, context: str) -> str:
-        """速读摘要: 固定结构化提示词, 全文直塞(调用方负责截断)。"""
+        """速读摘要: 默认固定结构化提示词, 可被 set_summary_prompt 覆盖;
+        全文直塞(调用方负责截断)。"""
         async with httpx.AsyncClient() as client:
             return await self._chat(client, [
-                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "system", "content": self._summary_prompt},
                 {"role": "user", "content": "文档正文如下:\n\n" + context},
             ])
 

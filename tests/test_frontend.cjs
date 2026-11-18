@@ -388,6 +388,46 @@ test('jumping to a reference and going back restores the reading position', () =
   assert.equal(mark.style.top, '75.000%');
 });
 
+test('tabs can be reordered and stay marked draggable', () => {
+  const { element, run } = setup();
+  run('tabs = [{id:"a",info:{name:"A"}},{id:"b",info:{name:"B"}},'
+    + '{id:"c",info:{name:"C"}},{id:"d",info:{name:"D"}}]; activeTab = "b"; renderTabs()');
+  assert.match(element('#tabbar').innerHTML, /draggable="true"/);
+  const ids = () => run('JSON.stringify(tabs.map(t => t.id))');
+  run('moveTab("a", "c", false)');   // a 移到 c 前
+  assert.equal(ids(), '["b","a","c","d"]');
+  run('moveTab("d", "b", false)');   // d 移到最前
+  assert.equal(ids(), '["d","b","a","c"]');
+  run('moveTab("b", "c", true)');    // b 移到 c 后
+  assert.equal(ids(), '["d","a","c","b"]');
+  run('moveTab("b", "b", true)');    // 自身/未知 id 不动
+  run('moveTab("b", "zzz", false)');
+  assert.equal(ids(), '["d","a","c","b"]');
+  assert.equal(run('activeTab'), 'b');   // 激活态不受排序影响
+});
+
+test('clicking a tab in shelf mode exits shelf', () => {
+  const { context, element, run } = setup();
+  const shelfLog = [];
+  context.__shelfLog = shelfLog;
+  run('const _setShelf = setShelf; setShelf = (on) => { __shelfLog.push(on); };');
+  context.document.body.classList.contains = (c) => c === 'shelf';
+  const mk = (id, name) => ({ id, info: { name, ready: true, pages: 1,
+    sizes: [[612, 792]], chars: 100, paras: 1, provider: 'p', model: 'm' },
+    pStart: 1, pEnd: 0 });
+  run(`tabs = [${JSON.stringify(mk('a', 'A'))}, ${JSON.stringify(mk('b', 'B'))}]; activeTab = 'a'`);
+  run('INFO = tabs[0].info');   // 与真实应用一致: 激活标签的 INFO 已就位
+  run('switchTab("b")');             // 切到别的标签: 退出书架并完成切换
+  assert.deepEqual(shelfLog, [false]);
+  assert.equal(run('activeTab'), 'b');
+  run('switchTab("b")');             // 点当前标签: 也退出书架(否则看似没反应)
+  assert.deepEqual(shelfLog, [false, false]);
+  context.document.body.classList.contains = () => false;   // 非书架不触发
+  run('switchTab("a")');
+  assert.deepEqual(shelfLog, [false, false]);
+  assert.equal(run('activeTab'), 'a');
+});
+
 test('ctrl+wheel zoom keeps the reading position without scrolling', () => {
   const { context, element, run } = setup();
   const wheel = context.window._on && context.window._on.wheel;

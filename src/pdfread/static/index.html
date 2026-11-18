@@ -402,6 +402,21 @@
       </div>
 
       <div class="sec">
+        <h3>速读摘要</h3>
+        <div class="fld">
+          <label>摘要提示词 <span id="sumBadge" class="badge"></span></label>
+          <textarea id="sumPrompt" rows="8" spellcheck="false"
+            style="width:100%;resize:vertical;font-size:12.5px;line-height:1.6"></textarea>
+        </div>
+        <div class="hint" id="sumHint">留空使用内置默认；自定义后摘要按新提示词重新生成。</div>
+        <div class="acts">
+          <button id="btnSumReset" class="ghost" type="button">恢复默认</button>
+          <span class="spacer"></span>
+          <button id="btnSumSave" type="button">保存提示词</button>
+        </div>
+      </div>
+
+      <div class="sec">
         <h3>关于</h3>
         <div class="fld" style="display:flex;align-items:center;gap:8px">
           <span id="verNow" style="color:var(--dim);font-size:12px">版本 …</span>

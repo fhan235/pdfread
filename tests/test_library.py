@@ -314,6 +314,42 @@ def test_summary_is_cached(client, make_pdf, monkeypatch):
     assert len(calls) == 1
 
 
+def test_summary_prompt_customizable(client, make_pdf, monkeypatch):
+    from pdfread.translate import SUMMARY_PROMPT
+    doc = opened(client, make_pdf("sump.pdf", "We propose a method. It works."))
+    calls = []
+
+    async def fake_chat(self, client_, messages):
+        calls.append(messages)
+        return "## 一句话总结\n- 很好。"
+
+    monkeypatch.setattr(server.Translator, "_chat", fake_chat)
+
+    # 设置接口会同时返回自定义值与内置默认(供设置面板展示与恢复)
+    got = client.get("/api/settings").json()
+    assert got["summary_prompt"] == ""
+    assert got["summary_prompt_default"] == SUMMARY_PROMPT
+
+    # 非法类型被拒
+    assert client.post("/api/settings", json={"summary_prompt": 123}).status_code == 400
+
+    # 自定义提示词生效, 且换提示词后不命中默认提示词的缓存(重新调用模型)
+    r = client.post("/api/settings", json={"summary_prompt": "自定义提示词XYZ"})
+    assert r.status_code == 200
+    assert client.get("/api/settings").json()["summary_prompt"] == "自定义提示词XYZ"
+    client.post("/api/summary", json={"doc": doc["doc"]})
+    assert calls[-1][0] == {"role": "system", "content": "自定义提示词XYZ"}
+    n_custom = len(calls)
+    client.post("/api/summary", json={"doc": doc["doc"]})   # 自定义下也有缓存
+    assert len(calls) == n_custom
+
+    # 恢复默认: 摘要回到内置提示词
+    client.post("/api/settings", json={"summary_prompt": ""})
+    assert client.get("/api/settings").json()["summary_prompt"] == ""
+    client.post("/api/summary", json={"doc": doc["doc"]})
+    assert calls[-1][0] == {"role": "system", "content": SUMMARY_PROMPT}
+
+
 def test_library_db_migration_adds_progress_columns(tmp_path):
     import sqlite3
     db = str(tmp_path / "old.db")
